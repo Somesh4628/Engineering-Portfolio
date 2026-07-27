@@ -153,4 +153,4 @@ python config_tool.py forge \
 Distributed under the **MIT License** for public interfaces. Core edge twin algorithms, hardware orchestrator pipelines, and dynamic compilation mechanics are covered by patents and proprietary technology. See `LICENSE` for details.
 
 ---
-*Maintained by [Somesh](https://github.com/Somesh4628) • R&D Engineering Portfolio*
+*Maintained by [Somesh](https://github.com/Somesh4628)*

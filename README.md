@@ -72,4 +72,4 @@ python config_tool.py forge --directive directive.json
 Distributed under the **MIT License**. See `LICENSE` for details.
 
 ---
-*Created & Maintained by [Somesh](https://github.com/Somesh4628) • Senior R&D Engineer*
+*Created & Maintained by [Somesh](https://github.com/Somesh4628)*

@@ -107,4 +107,4 @@ streamlit run app.py
 Distributed under the **MIT License**. Core proprietary algorithms, clinical rules, and model weights remain confidential. See `LICENSE` for details.
 
 ---
-*Maintained by [Somesh](https://github.com/Somesh4628) • R&D Engineering Portfolio*
+*Maintained by [Somesh](https://github.com/Somesh4628)*
