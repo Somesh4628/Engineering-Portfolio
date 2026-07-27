@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="pipe-gradient" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#E0E0E0"/><stop offset="50%" stop-color="#C0C0BE"/><stop offset="100%" stop-color="#8B8B8A"/>
+    </linearGradient>
+  </defs>
+  <rect x="10" y="42" width="80" height="16" fill="url(#pipe-gradient)" />
+  <rect x="10" y="40" width="4" height="20" fill="#A0A09E" />
+  <rect x="86" y="40" width="4" height="20" fill="#A0A09E" />
+</svg>

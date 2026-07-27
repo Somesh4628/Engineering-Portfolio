@@ -1,0 +1,79 @@
+# Exclude all projects except Gaitform and MyPipelineApp (IntelliPipe)
+/Automation/
+/Claude code/
+/Linkedn/
+/Maestro_Engine/
+/SYNCSONIC/
+/app/
+/camera/
+/code agent/
+/ecommerce-web/
+/fitness app/
+/flutter/
+/health care/
+/portfoliyo/
+/project_aura/
+/solidwork/
+/soul_forger/
+
+# Secrets, Credentials & Keys
+*.key
+*.pem
+*.p12
+*.crt
+*.pfx
+*.keystore
+.env
+.env.local
+.env.*.local
+
+# Dependencies
+node_modules/
+.venv/
+venv/
+env/
+ENV/
+
+# Python & Binaries
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+*.coverage
+*.exe
+*.dll
+*.pyd
+*.so
+*.dylib
+*.bin
+*.apk
+
+# Archives & Large Files
+dist/
+build/
+.next/
+.od-skills/
+*.zip
+*.tar.gz
+*.7z
+*.iso
+*.csv
+*.mp4
+*.wav
+*.onnx
+*.task
+*.h5
+*.log
+output.log
+MANUAL_TRAINING_DATA.csv
+"MyPipelineApp 2.o.zip"
+
+# IDE & OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies

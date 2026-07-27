@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gaitform"
+version = "0.1.0"
+description = "Gaitform: Video to Orthotic prototype"
+authors = [
+    {name = "Antigravity", email = "test@example.com"}
+]
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy",
+    "scipy",
+    "mediapipe",
+    "trimesh",
+    "streamlit",
+    "matplotlib"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest"
+]
+
+[tool.setuptools.packages.find]
+include = ["gaitform*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

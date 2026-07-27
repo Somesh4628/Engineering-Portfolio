@@ -1,0 +1,24 @@
+# =========================================================
+# IntelliPipe Factory v13+ - Required Python Libraries
+# ---------------------------------------------------------
+# To install all dependencies, run this command:
+# pip install r requirements.txt
+# =========================================================
+
+# Core Libraries for Data Handling & Calculation
+numpy
+pandas
+
+# SVG / XML Parsing Engine
+lxml
+
+# SVG Generation Engine
+pysvg-py3
+
+# Image Processing Engine
+Pillow
+
+# PDF to SVG Extraction (Optional but Recommended)
+svglib
+
+pip install ezdxf 

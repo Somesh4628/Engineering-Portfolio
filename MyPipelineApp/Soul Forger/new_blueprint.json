@@ -1,0 +1,54 @@
+{
+  "project_details": {
+    "name": "sam",
+    "description": null,
+    "version": "1.0"
+  },
+  "ai_model": {
+    "enabled": false,
+    "model_file": "none.h",
+    "output_classes": []
+  },
+  "network_info": null,
+  "nodes": [
+    {
+      "node_id": "inlet_1",
+      "type": "inlet",
+      "label": "Main Inlet"
+    },
+    {
+      "node_id": "outlet_1",
+      "type": "outlet",
+      "label": "Main Outlet"
+    }
+  ],
+  "pipes": [
+    {
+      "pipe_id": "P1",
+      "source_node": "inlet_1",
+      "target_node": "outlet_1",
+      "flow_sensor": {
+        "sensor_id": "S1",
+        "label": "Main Pipe",
+        "gpio_pin": 5,
+        "k_factor_ppl": 450.0
+      },
+      "properties": {
+        "length_m": 1.0,
+        "inner_diameter_m": 0.01
+      }
+    }
+  ],
+  "system_tuning_parameters": {
+    "default_profile_id": "default",
+    "profiles": [
+      {
+        "id": "default",
+        "label": "Default",
+        "update_interval_ms": 1000,
+        "median_window_size": 5,
+        "ema_alpha": 0.4
+      }
+    ]
+  }
+}

@@ -1,0 +1,36 @@
+Act as a Strict Quality Control Inspector and Principal Software Engineer. I need a zero-tolerance QC, Security, and Logic audit on the Python code in this directory. Do not allow any tolerance in quality, logic flaws, or security vulnerabilities.
+
+Please execute the following Master QC Pipeline step-by-step:
+
+### Phase 1: Environment & Tool Setup
+1. Run `pip install black autoflake flake8 mypy pylint pytest pytest-cov bandit radon isort`
+2. Create a `.flake8` file in the root directory:
+   [flake8]
+   max-line-length = 88
+   extend-ignore = E501
+3. Create a `mypy.ini` file in the root directory:
+   [mypy]
+   ignore_missing_imports = True
+
+### Phase 2: Automated Fixing & Formatting (Style)
+1. **Remove Dead Code**: Run `python -m autoflake --in-place --remove-all-unused-imports --remove-unused-variables -r .`
+2. **Sort Imports**: Run `python -m isort .`
+3. **Format Code**: Run `python -m black .`
+
+### Phase 3: Static Analysis & Type Checking (Syntax & Types)
+1. **Flake8**: Run `python -m flake8 .` to catch syntax errors and stylistic violations.
+2. **MyPy**: Run `python -m mypy .` to mathematically prove type-safety and ensure no incompatible variables are passed to functions.
+3. **Pylint**: Run `python -m pylint **/*.py` for deep structural code analysis.
+*If Phase 3 produces errors, you must manually rewrite the code to fix them until the output is 0 errors.*
+
+### Phase 4: Unit Testing (Logic)
+With `pytest`, we write "Unit Tests". A unit test is a small script that basically says: "Run this specific function with these inputs, and check if the result is exactly what I expect." If the output matches your expectations, the test passes; if the logic is broken, the test fails.
+1. Inspect the code and write a comprehensive suite of Unit Tests in a `tests/` directory covering all core logic, mathematical calculations, and edge cases.
+2. Run `python -m pytest --cov=. tests/`
+3. **Iterate**: If any tests fail, you must diagnose the logic flaw in the main code, fix the logic, and re-run the tests until passing. Ensure code coverage is above 80%.
+
+### Phase 5: Security & Complexity (Robustness)
+1. **Security**: Run `python -m bandit -r .` to scan for common security vulnerabilities (e.g., hardcoded passwords, unsafe YAML loading, injection flaws). Fix any HIGH or MEDIUM severity issues.
+2. **Complexity**: Run `python -m radon cc . -a -nc` to check for Cyclomatic Complexity (functions that are too complicated/nested). Refactor any function that receives a grade of 'D' or worse into smaller, manageable functions.
+
+**Do not stop until the repository passes all 5 phases perfectly. Provide a summary of all logic bugs found and fixed during Phase 4.**

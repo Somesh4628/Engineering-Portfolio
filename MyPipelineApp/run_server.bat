@@ -1,0 +1,3 @@
+@echo off
+echo Starting Soul Forger Web Server...
+"D:\vs code\MyPipelineApp\.venv\Scripts\python.exe" -m uvicorn soul_forger.server:app --reload

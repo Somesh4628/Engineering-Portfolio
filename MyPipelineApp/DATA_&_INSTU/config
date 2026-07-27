@@ -1,0 +1,3328 @@
+import json
+import os
+import re
+import inspect
+import random
+import csv
+import numpy as np 
+
+# =========================================================================
+#         THE ORACLE'S DATA FACTORY (Perfection Edition v2.1)
+# =========================================================================
+
+class PipelineSimulator:
+    """
+    (The Physics & Chaos Engine v2.1 - "Perfection")
+    Final version with unmistakable signatures for Burst and Drift events
+    to achieve near-perfect classification accuracy.
+    """
+    def __init__(self, graph, blueprint, tuning_profile):
+        self.graph = graph
+        self.blueprint = blueprint
+        self.tuning = tuning_profile
+        self.sensors = [{
+            'id': s['id'], 'pipe_id': s.get('pipe_id', 'unknown'), 'lps': 0.0,
+            'noise_factor': 1.0 + (random.random() - 0.5) * 0.05, # Tighter tolerance
+            'drift_offset': 0.0,
+            'dampening_factor': 1.0,
+            'lps_multiplier': 1.0,
+            'post_burst_chaos': 0.0 # NEW: Lingering effect after a burst
+        } for s in graph['sensors_ordered']]
+        self.nodes = [{'id': n['id'], 'balance': 0.0, 'inflows': n['inflows'], 'outflows': n['outflows']} for n in graph['balance_nodes']]
+
+    def run_simulation_scenario(self, duration_cycles, base_lps, event=None):
+        """Runs a full scenario, applying event lifecycles."""
+        if event:
+            # Schedule all effects before the simulation begins
+            self._schedule_event(event, duration_cycles)
+        
+        # Run the simulation cycle by cycle
+        for cycle in range(duration_cycles):
+            self._update_for_cycle(base_lps, cycle)
+            
+            for n in self.nodes:
+                n['balance'] = sum(self.sensors[i]['lps'] for i in n['inflows']) - sum(self.sensors[i]['lps'] for i in n['outflows'])
+            yield ([s['lps'] for s in self.sensors], [n['balance'] for n in self.nodes])
+            
+    def _schedule_event(self, event, duration_cycles):
+        """Pre-calculates and schedules all effects for a scenario."""
+        mode = event['type']
+        loc_id = event.get('location_id')
+        sev = event.get('severity', 1.0)
+        
+        # --- Persistent Failures ---
+        if mode in ['STEADY_LEAK', 'CLOG']:
+            target_pipe_idx = next((i for i,s in enumerate(self.sensors) if s['pipe_id'] == loc_id), None)
+            if target_pipe_idx is not None:
+                multiplier = 1.0 - (sev * 0.6) if mode == 'CLOG' else 1.0 - sev
+                dampening = 1.0 - (sev * 0.9) if mode == 'CLOG' else 1.0
+                for i in range(target_pipe_idx, len(self.sensors)):
+                    self.sensors[i]['lps_multiplier'] = multiplier
+                    self.sensors[i]['dampening_factor'] = dampening
+        
+        # --- Scheduled Events (Drift, Burst) ---
+        elif mode == 'SENSOR_DRIFT':
+            target_idx = next((i for i, s in enumerate(self.sensors) if s['id'] == loc_id), None)
+            if target_idx is not None:
+                self.sensors[target_idx]['drift_schedule'] = self._create_drift_schedule(sev, duration_cycles)
+        
+        elif mode == 'BURST_LEAK':
+            target_idx = next((i for i, s in enumerate(self.sensors) if s['pipe_id'] == loc_id), None)
+            if target_idx is not None:
+                # The pipe is now permanently broken after a burst
+                for i in range(target_idx, len(self.sensors)): self.sensors[i]['lps_multiplier'] = 0.1 * (1.0-sev)
+                # Schedule the one-time effects
+                self.sensors[target_idx]['initial_shock'] = {'type':'BURST', 'severity': sev}
+                # And schedule the aftershocks
+                for i in range(1, min(15, duration_cycles)): # Aftershocks for up to 15 cycles
+                    for s in self.sensors:
+                        s.setdefault('aftershocks', [0]*duration_cycles)[i] = random.uniform(-1,1) * sev * (0.4 / (i*0.5))
+
+        elif mode == 'BENIGN_ANOMALY':
+            for s in self.sensors: # Affects all sensors for one cycle
+                 s['initial_shock'] = {'type':'SLAM', 'severity': sev*0.6} # Less severe than a burst
+    
+    def _create_drift_schedule(self, severity, duration):
+        """Creates a gradual, then persistent, drift schedule."""
+        drift_magnitude = (self.tuning.get('near_zero_flow_lps', 0.05) * 6 * (severity - 0.5) * 2)
+        onset_duration = int(duration * 0.3) # Slower onset
+        schedule = []
+        for i in range(duration):
+            if i < onset_duration and onset_duration > 0:
+                schedule.append((drift_magnitude / onset_duration) * (i + 1))
+            else:
+                schedule.append(drift_magnitude)
+        return schedule
+    
+    def _update_for_cycle(self, base_lps, cycle_num):
+        """Applies all scheduled and persistent effects for a single cycle."""
+        # 1. Update Drift
+        for s in self.sensors:
+            if 'drift_schedule' in s and cycle_num < len(s['drift_schedule']):
+                s['drift_offset'] = s['drift_schedule'][cycle_num]
+        
+        # 2. Propagate base flow considering persistent reductions
+        current_lps = base_lps
+        for s in self.sensors:
+             current_lps *= s['lps_multiplier']
+             s['lps'] = max(0, current_lps)
+
+        # 3. Apply one-time shocks (Bursts, Valve Slams) for this cycle
+        for s in self.sensors:
+            if 'initial_shock' in s and cycle_num == 0:
+                shock = s['initial_shock']
+                if shock['type'] == 'BURST': s['lps'] *= 0.1 # Massive initial drop
+                s['lps'] += base_lps * 0.4 * random.uniform(-1, 1) * shock['severity']
+        
+        # 4. Apply lingering aftershocks and standard chaos noise
+        for s in self.sensors:
+            s['lps'] += s['drift_offset']
+            # Add aftershock effect if scheduled for this cycle
+            if 'aftershocks' in s and cycle_num < len(s['aftershocks']):
+                s['lps'] += base_lps * s['aftershocks'][cycle_num]
+
+            # Standard proportional noise, dampened by clogs
+            noise_mag = (s['lps'] * 0.02) + self.tuning.get('near_zero_flow_lps', 0.05) * 0.1
+            s['lps'] += random.normalvariate(0, noise_mag * s['noise_factor'] * s['dampening_factor'])
+            s['lps'] = max(0, s['lps'])
+            
+            
+# =========================================================================
+#       The Chief Cartographer & Scribe (v3.1 - NumPy Corrected)
+# =========================================================================
+
+def generate_training_dataset(blueprint, num_scenarios=4000, cycles_per_scenario=100, filename="training_data_engineered.csv"):
+    """
+    (The Chief Cartographer v3.1 - "Oracle's Intuition")
+    Generates a dataset with engineered time-series features and corrected
+    NumPy operations for robust calculation.
+    """
+    print(f"\n[Data Factory] Forging ENGINEERED dataset for >90% accuracy target...")
+    
+    from collections import deque
+    WINDOWS = [5, 15]
+
+    event_types = [
+        {'type': 'NORMAL', 'label': 0}, {'type': 'BENIGN_ANOMALY', 'label': 0},
+        {'type': 'STEADY_LEAK', 'label': 1}, {'type': 'BURST_LEAK', 'label': 2},
+        {'type': 'CLOG', 'label': 3}, {'type': 'SENSOR_DRIFT', 'label': 4},
+    ]
+
+    with open(filename, 'w', newline='') as csvfile:
+        csv_writer = csv.writer(csvfile)
+        header_written = False
+
+        for i in range(num_scenarios):
+            tuning_profile = next((p for p in blueprint['system_tuning_parameters']['profiles'] if p['id'] == 'normal_balanced'), None)
+            graph = build_system_graph(blueprint)
+            sim = PipelineSimulator(graph, blueprint, tuning_profile)
+            
+            event = random.choice(event_types)
+            location_id = 'none'
+            if event['type'] == 'SENSOR_DRIFT':
+                if graph.get('sensors_ordered'): location_id = random.choice(graph['sensors_ordered'])['id']
+            elif event['type'] in ['STEADY_LEAK', 'BURST_LEAK', 'CLOG']:
+                if blueprint.get('pipes'): location_id = random.choice(blueprint['pipes'])['pipe_id']
+                
+            event_to_apply = {'type': event['type'], 'location_id': location_id, 'severity': random.uniform(0.2, 0.8)}
+            simulation_results = sim.run_simulation_scenario(cycles_per_scenario, random.uniform(2.0, 10.0), event_to_apply)
+
+            history_buffer = deque(maxlen=max(WINDOWS) + 1)
+
+            for sensor_lps, node_balances in simulation_results:
+                current_features = sensor_lps + node_balances
+                history_buffer.append(current_features)
+                
+                if len(history_buffer) < max(WINDOWS) + 1:
+                    continue
+
+                final_feature_row = list(history_buffer[-1])
+                history_np = np.array(history_buffer)
+
+                for window in WINDOWS:
+                    window_data = history_np[-window:]
+                    final_feature_row.extend(np.mean(window_data, axis=0))
+                    final_feature_row.extend(np.std(window_data, axis=0))
+
+                # === THE DEFINITIVE FIX IS HERE ===
+                # Use NumPy arrays for element-wise subtraction
+                roc = np.array(history_buffer[-1]) - np.array(history_buffer[-2])
+                final_feature_row.extend(roc)
+                # =================================
+
+                if not header_written:
+                    base_headers = [f's{i}' for i in range(len(sensor_lps))] + [f'n{i}' for i in range(len(node_balances))]
+                    new_headers = list(base_headers)
+                    for w in WINDOWS:
+                        new_headers.extend([f'{h}_mean_{w}' for h in base_headers])
+                        new_headers.extend([f'{h}_std_{w}' for h in base_headers])
+                    new_headers.extend([f'{h}_roc' for h in base_headers])
+                    csv_writer.writerow(new_headers + ['failure_label'])
+                    header_written = True
+                
+                csv_writer.writerow(final_feature_row + [event['label']])
+
+            if (i + 1) % 400 == 0: print(f"  -> Engineered scenario {i+1}/{num_scenarios}: {event['type']}")
+    
+    print(f"\n[Data Factory] ✅ SUCCESS: Engineered feature dataset saved as '{filename}'.")
+            
+            
+
+USER_CPP_TEMPLATE = r"""// IntelliPipe Master C++ Template v7.1
+#include <FS.h>
+#include <SPIFFS.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <math.h>
+#include <vector>
+#include <deque>
+#include <algorithm>
+#include <numeric>
+#include <ArduinoJson.h>
+
+// __PYTHON_INJECT_TFLM_INCLUDES__
+// __PYTHON_INJECT_AI_MODEL_H__
+
+// ==========================================================================
+//               MASTER IMPLEMENTATION BLOCK (INJECTED)
+// ==========================================================================
+
+// __PYTHON_INJECT_MASTER_IMPLEMENTATION__
+"""
+# =========================================================================
+#                      FACTORY CORE ENGINES
+# =========================================================================
+def build_system_graph(bp):
+    """(Universal Topology Engine v1.1)
+    Analyzes a v4.0 blueprint and now correctly associates pipes with sensors.
+    """
+    print(" -> Executing Universal Topology Engine (v1.1)...")
+    nodes_map, pipes = {n['node_id']: n for n in bp.get('nodes', [])}, bp.get('pipes', [])
+    sensors_ordered, s_map = [], {}
+
+    # --- Pass 1: Sensor Indexing (REPAIRED) ---
+    for p in pipes:
+        if 'flow_sensor' in p:
+            s_data, s_id = p['flow_sensor'], p['flow_sensor'].get('sensor_id')
+            if not s_id or s_id in s_map: raise ValueError(f"Invalid sensor ID in pipe {p.get('pipe_id')}")
+            idx, label = len(sensors_ordered), s_data.get('label', s_id)
+            s_map[s_id] = idx
+            sensors_ordered.append({
+                'id': s_id,
+                'pin': s_data.get('gpio_pin'),
+                'k_factor': s_data.get('k_factor_ppl'),
+                'label': label,
+                'pipe_id': p.get('pipe_id') # <<<--- THE CRITICAL FIX IS HERE
+            })
+
+    # The rest of the function remains the same and is correct.
+    io = {nid: {'in': [], 'out': []} for nid in nodes_map}
+    for p in pipes:
+        if 'flow_sensor' in p:
+            idx = s_map[p['flow_sensor']['sensor_id']]
+            if p['source_node'] in io: io[p['source_node']]['out'].append(idx)
+            if p['target_node'] in io: io[p['target_node']]['in'].append(idx)
+
+    balance_nodes = [{'id': nid, 'inflows': sorted(d['in']), 'outflows': sorted(d['out'])} for nid, d in io.items() if d['in'] or d['out']]
+    
+    print(f" -> Topology analysis complete. Discovered {len(balance_nodes)} nodes and {len(sensors_ordered)} sensors.")
+    return {'sensors_ordered': sensors_ordered, 'balance_nodes': balance_nodes}
+
+
+# ----------- 5/5 GOLD MASTER GENERATOR (v2.0) --------------
+# This new version ONLY generates the tuning data structures and
+# global variables. It no longer generates C++ functions.
+# This resolves the dependency paradox.
+# -----------------------------------------------------------------
+def generate_tuning_system(bp):
+    """
+    (Surgical Tool v2.0) Generates ONLY the tuning profile data
+    structures and global variables.
+    """
+    cfg = bp.get('system_tuning_parameters', {})
+    profiles = cfg.get('profiles', [])
+    if not profiles: raise ValueError("No tuning profiles found in blueprint.")
+    keys = profiles[0].keys()
+    def get_cpp_type(val):
+        if isinstance(val, bool): return "bool"
+        if isinstance(val, int): return "int"
+        if isinstance(val, float): return "float"
+        return "String"
+    
+    s = ["struct TuningProfile {"]
+    for k in keys: s.append(f"    {get_cpp_type(profiles[0][k])} {k};")
+    s.extend([
+        "};", 
+        "std::vector<TuningProfile> AllProfiles;", 
+        "TuningProfile ActiveTuning;"
+    ])
+    return "\n".join(s)
+
+
+def generate_full_cpp_function(name, body_lines, return_type="void", parameters=None):
+    """(Core Helper v2.0) Wraps C++ lines into a full function definition."""
+    params_str = ", ".join(parameters) if parameters else ""
+    lines = [f"{return_type} {name}({params_str}) {{"]
+    for line in body_lines: lines.append(f"    {line}")
+    lines.append("}")
+    return "\n".join(lines)
+
+
+# =========================================================================
+#     FINALIZED SURGICAL TOOLKIT  surgical toolkit
+# =========================================================================
+
+
+def generate_digital_twin_namespace(graph, bp):
+    """
+    (Surgical Tool: Digital Twin Forge v1.4 - Certified)
+    Generates C++ with explicit constructors and 'emplace_back' to guarantee
+    unambiguous, error-free compilation.
+    """
+    print(" -> Forging the C++ Digital Twin namespace (v1.4)...")
+    
+    cpp_lines = [
+        "namespace Pipeline {",
+        "  struct Sensor {",
+        "    String id; uint8_t pin; float k_factor; volatile int pulse_count = 0;",
+        "    float raw_rate_lps = 0.0f; float filtered_rate_lps = 0.0f;",
+        "    bool is_valid_this_cycle = true; bool is_permanently_faulty = false;",
+        "    int consecutive_fault_count = 0; float prev_filtered_rate_lps = NAN;",
+        "    std::vector<float> history; int history_index = 0; float prev_raw_rate_lps = 0.0f;",
+        "    int stuck_counter = 0; Sensor() : history(1, 0.0f) {}",
+        "  };",
+        "  struct BalanceNode {",
+        "    String id; std::vector<int> inflow_sensor_indices; std::vector<int> outflow_sensor_indices;",
+        "    float mean_balance_lps = NAN; float std_dev_balance_lps = NAN;",
+        "    double sum_X = 0; double sum_X2 = 0;",
+        "    BalanceNode(String _id, std::vector<int> _in, std::vector<int> _out) : id(_id), inflow_sensor_indices(_in), outflow_sensor_indices(_out) {}",
+        "  };",
+        "  struct Pipe {",
+        "    String id; int sensor_index; float length_m; float diameter_m;",
+        "    Pipe(String _id, int _idx, float _len, float _dia) : id(_id), sensor_index(_idx), length_m(_len), diameter_m(_dia) {}",
+        "  };",
+        "  std::vector<Sensor> SENSORS;",
+        "  std::vector<BalanceNode> NODES;",
+        "  std::vector<Pipe> PIPES;",
+        "  void initializeGraph() {",
+        "    SENSORS.clear(); NODES.clear(); PIPES.clear();",
+        "    // Initialize SENSORS vector from blueprint",
+    ]
+    
+    for s in graph['sensors_ordered']:
+        cpp_lines.append(f"    SENSORS.emplace_back(); SENSORS.back().id=\"{s['id']}\"; SENSORS.back().pin={s['pin']}; SENSORS.back().k_factor={s['k_factor']:.2f}f;")
+    
+    cpp_lines.append("    // Initialize NODES vector from blueprint (unambiguous syntax)")
+    for n in graph['balance_nodes']:
+        inflows_str = ','.join(map(str, n['inflows']))
+        outflows_str = ','.join(map(str, n['outflows']))
+        cpp_lines.append(f"    NODES.emplace_back(\"{n['id']}\", std::vector<int>{{{inflows_str}}}, std::vector<int>{{{outflows_str}}});")
+
+    cpp_lines.append("    // Initialize PIPES vector from blueprint (unambiguous syntax)")
+    all_pipes = bp.get('pipes', [])
+    sensor_map = {s['id']: i for i, s in enumerate(graph['sensors_ordered'])}
+    for p in all_pipes:
+        if 'flow_sensor' in p:
+            s_idx = sensor_map.get(p['flow_sensor']['sensor_id'], -1)
+            props = p.get('properties', {})
+            cpp_lines.append(f"    PIPES.emplace_back(\"{p['pipe_id']}\", {s_idx}, {props.get('length_m',0.0):.4f}f, {props.get('inner_diameter_m',0.0):.4f}f);")
+            
+    cpp_lines.append("    // Dynamically resize sensor history buffers based on active tuning profile")
+    cpp_lines.append("    for(auto& s : SENSORS) { s.history.resize(ActiveTuning.median_window_size, 0.0f); }")
+    cpp_lines.append("  }") 
+    cpp_lines.append("} // End namespace Pipeline")
+
+    return "\n".join(cpp_lines)
+
+
+def generate_isrs(graph):
+    return "\n".join([f"void IRAM_ATTR ISR_S{i}() {{ if ({i} < Pipeline::SENSORS.size()) Pipeline::SENSORS[{i}].pulse_count++; }}" for i, _ in enumerate(graph['sensors_ordered'])])
+
+def generate_tuning_switch_handler(graph, blueprint):
+    """(Surgical Tool) Generates the handler for /set_tuning."""
+    body_lines = [
+        "if (server.hasArg(\"profile\")) {",
+        "    String profile_id = server.arg(\"profile\");",
+        "    setTuningProfile(profile_id);",
+        "    server.send(200, \"text/plain\", \"OK, tuning set to \" + profile_id);",
+        "} else {",
+        "    server.send(400, \"text/plain\", \"Bad Request: 'profile' argument missing\");",
+        "}",
+    ]
+    return generate_full_cpp_function("handleTuningSwitch", body_lines)
+
+def generate_recalibrate_handler(graph, blueprint):
+    """
+    (Surgical Tool, Certified) Forges the C++ logic for the /recalibrate
+    web handler, including a safety check for AP mode.
+    """
+    print(" -> Forging Recalibrate Handler...")
+    
+    body = [
+        "if (WiFi.getMode() == WIFI_STA) {",
+        "    logEvent(\"Web Recalibration Request\");",
+        "    SPIFFS.remove(\"/calibration.json\"); // Remove the old calibration",
+        "    resetCalibrationAndFaults(); // Reset the system to a clean, calibrating state",
+        "    server.send(200, \"text/plain\", \"OK: Recalibration process initiated.\");",
+        "} else {",
+        "    // This action should not be possible when in AP setup mode.",
+        "    server.send(403, \"text/plain\", \"Action not available in AP Mode.\");",
+        "}",
+    ]
+    return generate_full_cpp_function("handleRecalibrate", body)
+
+def generate_update_flow_rates(graph, blueprint):
+    """
+    (Surgical Tool, Purified) Forges sensor integrity logic, now generating
+    C++ compliant strings with correctly escaped newlines.
+    """
+    print(" -> Forging Flow Rate Update logic (Purified)...")
+    
+    num_sensors = len(graph['sensors_ordered'])
+    
+    body_lines = [
+        f"const int SENSOR_COUNT = {num_sensors};",
+        "std::vector<int> p(SENSOR_COUNT);",
+        "",
+        "// Atomically copy pulse counts and reset them",
+        "noInterrupts();",
+        "for(int i=0; i < SENSOR_COUNT; ++i) {",
+        "    p[i] = Pipeline::SENSORS[i].pulse_count;",
+        "    Pipeline::SENSORS[i].pulse_count = 0;",
+        "}",
+        "interrupts();",
+        "",
+        "float interval = (float)ActiveTuning.update_interval_ms / 1000.0f;",
+        "if (interval < 1e-6f) return;",
+        "",
+        "int new_faults_this_cycle = 0;",
+        "for (int i=0; i < SENSOR_COUNT; ++i) {",
+        "    auto& s = Pipeline::SENSORS[i];",
+        "    s.raw_rate_lps = (s.k_factor > 1e-6) ? ((float)p[i] / s.k_factor / interval) : 0.0f;",
+        "",
+        "    // === Sensor Integrity Protocol === ",
+        "    bool is_valid_now = true; String failReason = \"\";",
+        "    if (isnan(s.raw_rate_lps) || s.raw_rate_lps < 0 || s.raw_rate_lps > ActiveTuning.max_realistic_flow_lps) { is_valid_now = false; if(ActiveTuning.debug_validity_level > 0) failReason = \"Range\"; }",
+        "    if (abs(s.raw_rate_lps - s.prev_raw_rate_lps) < 1e-6) { s.stuck_counter++; } else { s.stuck_counter = 0; }",
+        "    if (s.stuck_counter >= ActiveTuning.stuck_sensor_cycles) { is_valid_now = false; if(ActiveTuning.debug_validity_level > 0) failReason = \"Stuck\"; }",
+        "    s.prev_raw_rate_lps = s.raw_rate_lps;",
+        "    s.is_valid_this_cycle = is_valid_now;",
+        "",
+        "    if (!s.is_valid_this_cycle) {",
+        "        s.consecutive_fault_count++;",
+        "        if (ActiveTuning.debug_validity_level > 0) {",
+        # <<<--- SURGICAL FIX #1 ---<<<
+        # The single \n in your generated code indicates the original Python string
+        # was not properly escaped. This ensures it generates '\\n' in C++.
+        "            Serial.printf(\"DBG_VLD: ID=%s, Reason=%s, Raw=%.3f, FaultCount=%d\\\\n\", s.id.c_str(), failReason.c_str(), s.raw_rate_lps, s.consecutive_fault_count);",
+        "        }",
+        "    } else {",
+        "        s.consecutive_fault_count = 0;",
+        "    }",
+        "",
+        "    if (!s.is_permanently_faulty && s.consecutive_fault_count >= ActiveTuning.max_consecutive_faults) {",
+        "        s.is_permanently_faulty = true;",
+        "        logEvent(\"Permanent FAULT declared: \" + s.id);",
+        "        new_faults_this_cycle++;",
+        "    }",
+        "}",
+        "",
+        "// --- State Transition Logic for Degraded/Fault Modes ---",
+        "if (new_faults_this_cycle > 0) {",
+        "    int total_faulty_sensors = 0; String faulty_ids = \"\";",
+        "    for(const auto& s : Pipeline::SENSORS) { if(s.is_permanently_faulty) { total_faulty_sensors++; faulty_ids += s.id + \" \"; } }",
+        "    faulty_ids.trim();",
+        "",
+        "    if (total_faulty_sensors >= 2) {",
+        "        currentSystemState = SENSOR_FAULT;",
+        "        statusMessage = \"MULTI-SENSOR FAULT: \" + faulty_ids;",
+        "    } else if (total_faulty_sensors == 1) {",
+        "        currentSystemState = OPERATING_DEGRADED;",
+        "        statusMessage = \"DEGRADED MODE: Fault on \" + faulty_ids;",
+        "    }",
+        "}",
+    ]
+    
+    return generate_full_cpp_function("updateFlowRatesAndValidity", body_lines)
+
+def generate_calculate_filtered_flow_rates(graph, blueprint):
+    """
+    (Surgical Tool, Certified) Forges the C++ logic for filtering raw
+    sensor data using a median filter and an exponential moving average.
+    """
+    print(" -> Forging Filtered Flow Rate logic...")
+    
+    body_lines = [
+        "for (auto& s : Pipeline::SENSORS) {",
+        "    if (s.is_valid_this_cycle) {",
+        "        // First, apply a median filter to reject spikes",
+        "        float median_f = applyMedianFilter(s);",
+        "",
+        "        // Then, apply an EMA filter for smoothing",
+        "        if (isnan(s.prev_filtered_rate_lps)) {",
+        "            s.filtered_rate_lps = median_f;",
+        "        } else {",
+        "            s.filtered_rate_lps = (ActiveTuning.ema_alpha * median_f) + ((1.0f - ActiveTuning.ema_alpha) * s.prev_filtered_rate_lps);",
+        "        }",
+        "        s.filtered_rate_lps = max(0.0f, s.filtered_rate_lps);",
+        "    }",
+        "    s.prev_filtered_rate_lps = s.filtered_rate_lps;",
+        "}",
+    ]
+    return generate_full_cpp_function("calculateFilteredFlowRates", body_lines)
+
+
+def generate_filtered_flow_rates(graph, blueprint): # <-- SIGNATURE IS NOW CORRECT
+    """Generates C++ logic for filtering flow rates. Now accepts blueprint for consistent signature."""
+    body_lines = [
+        "for(auto& s : Pipeline::SENSORS) {",
+        "    if(s.is_valid_this_cycle) {",
+        "        float median_f = applyMedianFilter(s);",
+        "        if(isnan(s.prev_filtered_rate_lps)) {",
+        "            s.filtered_rate_lps = median_f;",
+        "        } else {",
+        "            s.filtered_rate_lps = (ActiveTuning.ema_alpha * median_f) + ((1.0f - ActiveTuning.ema_alpha) * s.prev_filtered_rate_lps);",
+        "        }",
+        "        s.filtered_rate_lps = max(0.0f, s.filtered_rate_lps);",
+        "    }",
+        "    s.prev_filtered_rate_lps = s.filtered_rate_lps;",
+        "}",
+    ]
+    return generate_full_cpp_function("calculateFilteredFlowRates", body_lines)
+
+def generate_save_calibration(graph, blueprint):
+    """
+    (Surgical Tool: The Foreman's Scribe)
+    Generates C++ to save the state of all nodes and tuning to a JSON file.
+    """
+    print(" -> Forging the Scribe: generate_save_calibration...")
+    
+    num_nodes = len(graph['balance_nodes'])
+    json_doc_size = 256 + (num_nodes * 128)
+    
+    body_lines = [
+        "if (!calibrationComplete) {",
+        "    logEvent(\"Save DENIED: Calib Incomplete\");",
+        "    return false;",
+        "}",
+        f"StaticJsonDocument<{json_doc_size}> doc;",
+        "",
+        "// --- Embed Metadata ---",
+        "doc[\"file_version\"] = \"1.1-Foreman\";",
+        f"doc[\"project_name\"] = \"{blueprint.get('project_details', {}).get('name', 'Unknown')}\";",
+        "doc[\"last_saved_ms\"] = millis();",
+        "",
+        "// --- Persist the System's Mind ---",
+        "JsonObject state = doc.createNestedObject(\"saved_state\");",
+        "state[\"active_tuning_profile_id\"] = ActiveTuning.id;",
+        "",
+        "JsonArray nodes = state.createNestedArray(\"calibrated_nodes\");",
+        "for (const auto& n : Pipeline::NODES) {",
+        "    if (isnan(n.mean_balance_lps) || isnan(n.std_dev_balance_lps)) continue;",
+        "    JsonObject node_obj = nodes.createNestedObject();",
+        "    node_obj[\"id\"] = n.id;",
+        "    node_obj[\"mean_lps\"] = serialized(String(n.mean_balance_lps, 6));",
+        "    node_obj[\"std_dev_lps\"] = serialized(String(n.std_dev_balance_lps, 6));",
+        "}",
+        "",
+        "// --- Commit Memory to Physical Storage ---",
+        "File file = SPIFFS.open(\"/calibration.json\", FILE_WRITE);",
+        "if (!file) { logEvent(\"SaveFAIL: FS Open\"); return false; }",
+        "",
+        "size_t bytes_written = serializeJson(doc, file);",
+        "file.close();",
+        "",
+        "if (bytes_written > 0) {",
+        "    logEvent(\"Calibration Saved\");",
+        "    return true;",
+        "} else {",
+        "    logEvent(\"SaveFAIL: Write Err\");",
+        "    return false;",
+        "}"
+    ]
+    return generate_full_cpp_function("saveCalibrationData", body_lines, "bool")
+
+
+
+def generate_data_api_handler(graph, blueprint):
+    """
+    (Surgical Tool, FINAL CERTIFIED) Forges the /data API endpoint.
+    This is the definitive version with all known bugs corrected.
+    """
+    print(" -> Forging the v2.2 /data API handler (FINAL)...")
+    json_doc_size = 512 + (len(graph['sensors_ordered'])*64) + (len(graph['balance_nodes'])*96) + (len(blueprint.get('system_tuning_parameters',{}).get('profiles',[]))*128)
+
+    body_lines = [
+        f"StaticJsonDocument<{json_doc_size}> doc;",
+        "doc[\"system_state\"] = (int)currentSystemState;",
+        "doc[\"system_health\"] = (int)currentHealth;",
+        "doc[\"status_message\"] = statusMessage; // CRITICAL FIX",
+        "doc[\"uptime_seconds\"] = millis() / 1000;",
+        "doc[\"active_tuning_profile_id\"] = ActiveTuning.id;",
+        "JsonArray profiles = doc.createNestedArray(\"available_tuning_profiles\");",
+        "for (const auto& p : AllProfiles) {",
+        "    JsonObject prof = profiles.createNestedObject();",
+        "    prof[\"id\"] = p.id;",
+        "    prof[\"label\"] = p.label; // CRITICAL FIX",
+        "}",
+        "JsonArray sensors = doc.createNestedArray(\"sensors\");",
+        "for (const auto& s : Pipeline::SENSORS) {",
+        "    JsonObject o=sensors.createNestedObject(); o[\"id\"]=s.id; o[\"lpm\"]=s.filtered_rate_lps*60.0f; o[\"status\"]=s.is_permanently_faulty?\"FAULT\":(s.is_valid_this_cycle?\"VALID\":\"INVALID\");",
+        "}",
+        "JsonArray nodes = doc.createNestedArray(\"nodes\");",
+        "for (const auto& n : Pipeline::NODES) {",
+        "    JsonObject o=nodes.createNestedObject(); o[\"id\"]=n.id; o[\"mean_lps\"]=n.mean_balance_lps; o[\"std_dev_lps\"]=n.std_dev_balance_lps;",
+        "}",
+        "JsonArray events = doc.createNestedArray(\"event_log\");",
+        "for (const auto& log : eventLog) { events.add(log); }",
+        "String output; serializeJson(doc, output);",
+        "server.sendHeader(\"Access-Control-Allow-Origin\", \"*\");",
+        "server.send(200, \"application/json\", output);",
+    ]
+    return generate_full_cpp_function("handleData", body_lines)
+
+
+
+
+
+def generate_page_shell(graph, blueprint):
+    """
+    (Surgical Tool: State-Aware Visualizer v3.2 - Stabilized)
+    Generates the complete, state-aware web page. This version uses a robust
+    single-block approach to eliminate all syntax errors and is readable.
+    """
+    print(" -> Forging the State-Aware Web UI (Stabilized)...")
+
+    # --- PART 1: DYNAMICALLY GENERATE TOPOLOGY-SPECIFIC ELEMENTS ---
+
+    # Calculate Node Positions (Robust Layout)
+    node_positions, x_max, y_max = {}, 100, 150
+    node_map = {n['id']: n for n in graph['balance_nodes']}
+    root_nodes = sorted([n['id'] for n in graph['balance_nodes'] if not n['inflows']])
+    processed_nodes, level = set(), 0
+    nodes_in_level = root_nodes
+    while nodes_in_level:
+        x = 100 + (level * 220)
+        y, x_max = 100, max(x_max, x + 50)
+        for i, node_id in enumerate(nodes_in_level):
+            if node_id not in processed_nodes:
+                node_positions[node_id] = {'x': x, 'y': y}
+                y += 120
+                y_max, processed_nodes = max(y_max, y), processed_nodes | {node_id}
+        next_level_nodes = []
+        for node_id in nodes_in_level:
+            for outflow_idx in node_map.get(node_id, {}).get('outflows', []):
+                pipe_id = next((s['pipe_id'] for s in graph['sensors_ordered'] if s['id'] == graph['sensors_ordered'][outflow_idx]['id']), None)
+                target_pipe = next((p for p in blueprint['pipes'] if p.get('pipe_id') == pipe_id), None)
+                if target_pipe and target_pipe['target_node'] not in processed_nodes:
+                    next_level_nodes.append(target_pipe['target_node'])
+        nodes_in_level, level = sorted(list(set(next_level_nodes))), level + 1
+
+    # Forge SVG Elements
+    svg_pipes_html, svg_nodes_html, svg_labels_html = "", "", ""
+    for p in blueprint.get('pipes', []):
+        pos1, pos2 = node_positions.get(p['source_node']), node_positions.get(p['target_node'])
+        if pos1 and pos2:
+            sensor_id = p.get('flow_sensor', {}).get('sensor_id', '')
+            svg_pipes_html += f'<line id="pipe-viz-{sensor_id}" x1="{pos1["x"]}" y1="{pos1["y"]}" x2="{pos2["x"]}" y2="{pos2["y"]}" class="pipe" />'
+    for node_id, pos in node_positions.items():
+        svg_nodes_html += f'<circle id="node-viz-{node_id}" cx="{pos["x"]}" cy="{pos["y"]}" r="15" class="node" />'
+        svg_labels_html += f'<text x="{pos["x"]}" y="{pos["y"] + 35}" class="label">{node_id}</text>'
+    pipeline_vis_html = f'<svg width="100%" height="{y_max}" viewBox="0 0 {x_max + 100} {y_max + 50}"><g>{svg_pipes_html}</g><g>{svg_nodes_html}</g><g>{svg_labels_html}</g></svg>'
+
+    # Forge Sensor and Control Cards
+    sensor_cards_html = "".join([f'<div class="data-box" id="sensor-{s["id"]}"><h3>{s.get("label", s["id"]).upper()}</h3><p class="data-val">--.--</p><small>L/min</small><span class="status-badge">--</span></div>' for s in graph['sensors_ordered']])
+    tuning_options_html = "".join([f'<option value="{p["id"]}">{p.get("label", p["id"])}</option>' for p in blueprint.get('system_tuning_parameters', {}).get('profiles', [])])
+
+    # --- PART 2: ASSEMBLE THE HTML PAGE COMPONENTS ---
+    # These are the reusable building blocks of our UI.
+    
+    # Define a clean CSS block. Using a triple-quoted string handles all characters safely.
+    css_block = r"""
+    body,html{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,sans-serif;background-color:#1a1a1a;color:#e0e0e0}
+    .container{padding:10px} .status-banner{padding:15px;text-align:center;font-weight:700;margin-bottom:10px;border-radius:8px;background-color:#2c3e50;color:#fff;transition:background-color .3s ease}
+    .grid-container{display:grid;grid-template-columns:1fr;gap:20px} @media(min-width:1024px){.grid-container{grid-template-columns:3fr 1fr}}
+    .card{background-color:#2c2c2c;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,.5)} h1,h2{color:#4a8df3;border-bottom:1px solid #4a8df3;padding-bottom:10px;margin-top:0}
+    .data-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:15px} .data-box{background-color:#3b3b3b;padding:15px;border-radius:6px;text-align:center}
+    .data-box h3{margin:0 0 5px;font-size:1em;color:#a1c4fd} .data-val{font-size:2em;font-weight:700;margin:0} .status-badge{font-size:.8em;padding:3px 8px;border-radius:10px;background-color:#555}
+    .pipeline-viz svg{width:100%;height:auto} .pipe{stroke:#4a8df3;stroke-width:8;transition:stroke .3s ease}.pipe.fault{stroke:#ffc400}.pipe.sensor-fault{stroke:#e53935;stroke-dasharray:10 5;animation:d 1s linear infinite}
+    .node{fill:#2c3e50;stroke:#a1c4fd;stroke-width:3;transition:all .3s ease}.node.fault{fill:#c62828;animation:p .8s infinite alternate}
+    .label{fill:#e0e0e0;font-size:14px;font-weight:700;text-anchor:middle;user-select:none}
+    label,input,select,button{display:block;width:100%;margin-bottom:10px;box-sizing:border-box} input,select,button{padding:10px;border:1px solid #555;border-radius:4px;background-color:#3b3b3b;color:#e0e0e0;font-size:1em}
+    button{background-color:#4a8df3;cursor:pointer;font-weight:700;border:0} button:hover{background-color:#5a9eff}
+    #event-log{max-height:200px;overflow-y:auto;background-color:#1a1a1a;padding:10px;border-radius:4px;font-size:.9em;line-height:1.5}
+    @keyframes p{to{transform:scale(1.1);stroke-width:5px}} @keyframes d{to{stroke-dashoffset:15}}
+    """
+    
+    # Define a clean JavaScript block.
+    js_block = r"""
+    function fetchData(){fetch("/data").then(r=>r.json()).then(d=>{document.getElementById("status-banner").textContent=d.status_message;const t=document.getElementById("tuning-selector");t&&(t.value=d.active_tuning_profile_id);d.sensors.forEach(s=>{const e=document.getElementById("sensor-"+s.id);e&&(e.querySelector(".data-val").textContent=s.lpm.toFixed(1),e.querySelector(".status-badge").textContent=s.status)});document.querySelectorAll("[id^=node-viz-],[id^=pipe-viz-]").forEach(e=>e.classList.remove("fault","sensor-fault"));const s=d.status_message;if(s){if(s.includes("@")){const t=s.split("@")[1].trim();document.getElementById("node-viz-"+t)?.classList.add("fault")}else if(s.includes("DEGRADED MODE")){const t=s.split("on")[1].trim().split(" ")[0];document.getElementById("pipe-viz-"+t)?.classList.add("sensor-fault")}}document.getElementById("event-log").innerHTML=d.event_log.map(e=>`<div>${e}</div>`).reverse().join("")})}
+    function handleNetSave(e){e.preventDefault();const t=e.target,s=document.getElementById("net-status");s.textContent="Saving...",fetch("/save_network",{method:"POST",body:new URLSearchParams(new FormData(t))}).then(e=>{if(!e.ok)throw new Error("HTTP status "+e.status);s.style.color="green",s.textContent="Success! Device is rebooting..."}).catch(e=>{s.style.color="red",s.textContent="Error: "+e.message})}
+    function triggerRecalibration(){confirm("This will erase current calibration and restart the device. Proceed?")&&fetch("/recalibrate",{method:"POST"})}
+    function setTuning(){const e=document.getElementById("tuning-selector").value;fetch("/set_tuning?profile="+e,{method:"POST"})}
+    document.addEventListener("DOMContentLoaded",()=>{document.getElementById("net-form")?.addEventListener("submit",handleNetSave);document.getElementById("tuning-selector")?.addEventListener("change",setTuning);document.getElementById("status-banner")&&(fetchData(),setInterval(fetchData,2e3))});
+    """
+
+    # Assemble HTML partials
+    network_card = r'<div class="card"><h2>Network Configuration</h2><form id="net-form"><p>Connect the device to a new WiFi network.</p><label for="ssid">SSID:</label><input type="text" id="ssid" name="ssid" required><label for="password">Password:</label><input type="password" name="password"><button type="submit">Save & Reboot</button></form><p id="net-status"></p></div>'
+    controls_card = f'<div class="card"><h2>Controls</h2><label for="tuning-selector">Tuning Profile:</label><select id="tuning-selector">{tuning_options_html}</select><button onclick="triggerRecalibration()">Force Recalibration</button></div>'
+
+    # Assemble full page bodies
+    dashboard_body = f'<div class="container"><header><h1>IntelliPipe™ Dashboard</h1><div class="status-banner" id="status-banner">...</div></header><main class="grid-container"><section class="main-content"><h2>Sensors</h2><div class="data-grid">{sensor_cards_html}</div><h2>Visualization</h2><div class="pipeline-viz">{pipeline_vis_html}</div></section><aside class="sidebar">{controls_card}{network_card}<div class="card"><h2>Event Log</h2><div id="event-log"></div></div></aside></main></div>'
+    config_body = f'<div class="container"><header><h1>IntelliPipe™ Setup</h1></header>{network_card}</div>'
+    
+    # --- PART 3: GENERATE THE FINAL C++ STATE MACHINE ---
+    # This logic uses simple, robust string concatenation to build the final return value.
+    
+    # Create the config-only page string
+    config_page_string = '<!DOCTYPE html><html lang="en"><head><title>Setup</title><style>' + css_block + '</style></head><body>' + config_body + '<script>' + js_block + '</script></body></html>'
+
+    # Create the full dashboard page string
+    dashboard_page_string = '<!DOCTYPE html><html lang="en"><head><title>IntelliPipe</title><style>' + css_block + '</style></head><body>' + dashboard_body + '<script>' + js_block + '</script></body></html>'
+
+    # Build the C++ function body
+    body_lines = [
+        "    if (WiFi.getMode() == WIFI_AP) {",
+        "        // In AP Mode, serve the minimal configuration page.",
+        '        return R"raw(' + config_page_string + ')raw";',
+        "    } else {",
+        "        // In normal connected mode, serve the full dashboard.",
+        '        return R"raw(' + dashboard_page_string + ')raw";',
+        "    }",
+    ]
+
+    return generate_full_cpp_function("generatePageShell", body_lines, "String")
+
+
+
+
+def generate_handle_calibration(graph, blueprint):
+    """
+    (Surgical Tool, FINAL CERTIFIED) Forges the live calibration logic.
+    Transitions to the correct state (AI or Rules) and contains robust
+    sensor validity checks.
+    """
+    print(" -> Forging Calibration Handler (FINAL)...")
+    
+    ai_enabled = blueprint.get('ai_model', {}).get('enabled', False)
+    success_state = "AI_ACTIVE" if ai_enabled else "OPERATING_RULES"
+
+    body_lines = [
+        "if (currentSystemState != CALIBRATING) return;",
+        "",
+        "// === Stage 1: Check for stable flow conditions before starting === ",
+        "bool flow_is_stable_and_present = !Pipeline::SENSORS.empty() && Pipeline::SENSORS[0].filtered_rate_lps >= ActiveTuning.calibration_min_start_flow_lps;",
+        "if (flow_is_stable_and_present) {",
+        "    if (calibFlowConfirmCycles < ActiveTuning.calib_start_confirm_cycles) calibFlowConfirmCycles++;",
+        "} else {",
+        "    calibFlowConfirmCycles = 0;",
+        "    if (calibrationSamplesCollected > 0) {",
+        "        logEvent(\"Calib Reset: Flow stopped or became unstable\");",
+        "        resetCalibrationAndFaults();",
+        "    }",
+        "    statusMessage = \"Calib: Waiting for stable flow...\";",
+        "    return;",
+        "}",
+        "if (calibFlowConfirmCycles < ActiveTuning.calib_start_confirm_cycles) {",
+        "    statusMessage = \"Calib: Confirming stable flow...\";",
+        "    return;",
+        "}",
+        "",
+        "// === Stage 2: Check for valid sensor readings during sample collection === ",
+        "bool all_sensors_are_valid_this_cycle = true;",
+        "for (const auto& s : Pipeline::SENSORS) {",
+        "    if (!s.is_valid_this_cycle) {",
+        "        all_sensors_are_valid_this_cycle = false;",
+        "        break; // Exit early if one sensor is bad",
+        "    }",
+        "}",
+        "if (!all_sensors_are_valid_this_cycle) {",
+        "    invalidSamplesDuringCalibration++;",
+        "    // If we get too many bad readings, fail the calibration entirely.",
+        "    if (invalidSamplesDuringCalibration > ActiveTuning.calibration_sample_count / 4) { ",
+        "        logEvent(\"Calib FAIL: Sensor readings too unstable\");",
+        "        currentSystemState = FAILED_CALIBRATION;",
+        "    }",
+        "    return; // Skip this sample",
+        "}",
+        "",
+        "// === Stage 3: Collect samples if all checks pass === ",
+        "if (calibrationSamplesCollected == 0) logEvent(\"Calib: Collecting Samples\");",
+        "for (auto& n : Pipeline::NODES) {",
+        "    float balance = 0.0f;",
+        "    for (int i : n.inflow_sensor_indices) balance += Pipeline::SENSORS[i].filtered_rate_lps;",
+        "    for (int i : n.outflow_sensor_indices) balance -= Pipeline::SENSORS[i].filtered_rate_lps;",
+        "    if (!isnan(balance)) {",
+        "        n.sum_X += balance;",
+        "        n.sum_X2 += balance * balance;",
+        "    }",
+        "}",
+        "calibrationSamplesCollected++;",
+        "statusMessage = \"Calibrating: \" + String(calibrationSamplesCollected) + \"/\" + String(ActiveTuning.calibration_sample_count);",
+        "",
+        "// === Stage 4: Finalize calibration after collecting all samples === ",
+        "if (calibrationSamplesCollected >= ActiveTuning.calibration_sample_count) {",
+        "    if (calculateStatistics()) {",
+        "        logEvent(\"Calibration Complete.\");",
+        "        saveCalibrationData();",
+        f"       currentSystemState = {success_state}; // Transition to the correct operational state",
+        "        statusMessage = \"System Operational\";",
+        "    } else {",
+        "        logEvent(\"Calib FAIL: Could not calculate statistics\");",
+        "        currentSystemState = FAILED_CALIBRATION;",
+        "    }",
+        "}",
+    ]
+    
+    return generate_full_cpp_function("handleCalibration", body_lines)
+
+
+
+
+def generate_calculate_statistics(graph, blueprint):
+    """
+    (Surgical Tool, Purified) Forges the function to calculate node
+    statistics. Now generates C++ compliant strings.
+    """
+    print(" -> Forging Node Statistics function (Purified)...")
+    
+    body_lines = [
+        "bool all_ok = true;",
+        "for (auto& n : Pipeline::NODES) {",
+        "    if (!calculateNodeStatistics(n)) {",
+        "        all_ok = false;",
+        "    }",
+        "    // This Serial.printf is for debugging purposes",
+        # THE FIX: The string is now on a single line with '\\n' for the newline.
+        "    Serial.printf(\"CALIB OK '%s': Mean=%.4f, StdDev=%.5f\\n\", n.id.c_str(), n.mean_balance_lps, n.std_dev_balance_lps);",
+        "}",
+        "calibrationComplete = all_ok;",
+        "return all_ok;",
+    ]
+    return generate_full_cpp_function("calculateStatistics", body_lines, "bool")
+
+
+
+def generate_load_calibration(graph, blueprint):
+    """
+    (Surgical Tool, AI-Aware) Forges logic to restore saved calibration.
+    Transitions to AI_ACTIVE or OPERATING_RULES based on blueprint.
+    """
+    print(" -> Forging Calibration Loader (AI-Aware Edition)...")
+    ai_enabled = blueprint.get('ai_model', {}).get('enabled', False)
+    
+    success_state = "AI_ACTIVE" if ai_enabled else "OPERATING_RULES"
+    json_doc_size = 256 + (len(graph['balance_nodes']) * 128)
+
+    body_lines = [
+        "File file = SPIFFS.open(\"/calibration.json\", FILE_READ);",
+        "if (!file || file.size() == 0) {",
+        "    if (file) file.close();",
+        "    logEvent(\"LoadInfo: No calibration file found.\");",
+        "    return false;",
+        "}",
+        "",
+        f"StaticJsonDocument<{json_doc_size}> doc;",
+        "DeserializationError error = deserializeJson(doc, file);",
+        "file.close();",
+        "if (error) {",
+        "    logEvent(\"LoadFAIL: JSON Parse. Deleting corrupted file.\");",
+        "    SPIFFS.remove(\"/calibration.json\");",
+        "    return false;",
+        "}",
+        "",
+        f"const char* expected_project = \"{blueprint.get('project_details', {}).get('name', 'Unknown')}\";",
+        "if (strcmp(doc[\"project_name\"], expected_project) != 0) {",
+        "    logEvent(\"LoadFAIL: Project Mismatch\");",
+        "    return false;",
+        "}",
+        "",
+        "logEvent(\"Saved calibration found. Restoring state...\");",
+        "setTuningProfile(doc[\"saved_state\"][\"active_tuning_profile_id\"].as<String>());",
+        "JsonArray nodes_array = doc[\"saved_state\"][\"calibrated_nodes\"];",
+        "int nodes_loaded = 0;",
+        "for (JsonObject saved_node : nodes_array) {",
+        "    const char* saved_id = saved_node[\"id\"];",
+        "    for (auto& ram_node : Pipeline::NODES) {",
+        "        if (ram_node.id == saved_id) {",
+        "            ram_node.mean_balance_lps = saved_node[\"mean_lps\"].as<float>();",
+        "            ram_node.std_dev_balance_lps = saved_node[\"std_dev_lps\"].as<float>();",
+        "            nodes_loaded++; break;",
+        "        }",
+        "    }",
+        "}",
+        "",
+        "if (nodes_loaded > 0) {",
+        "    calibrationComplete = true;",
+        f"   currentSystemState = {success_state}; // Correctly transition to the designated state",
+        "    statusMessage = \"System OK (Loaded Calib)\";",
+        "    logEvent(\"Loaded \" + String(nodes_loaded) + \" node states.\");",
+        "    return true;",
+        "}",
+        "logEvent(\"LoadWARN: File valid, but no matching nodes found.\");",
+        "return false;",
+    ]
+    return generate_full_cpp_function("loadCalibrationData", body_lines, "bool")
+
+
+
+
+def generate_wifi_helpers(graph, blueprint):
+    """
+    (Integrated UI Tool) Forges lean C++ helpers for saving/loading network
+    credentials and handling the UI save request.
+    """
+    print(" -> Forging lean WiFi Helpers...")
+    cpp_code = [
+        "bool saveNetworkConfig(const String& ssid, const String& pass) {",
+        "    StaticJsonDocument<128> doc;",
+        "    doc[\"ssid\"] = ssid; doc[\"password\"] = pass;",
+        "    File file = SPIFFS.open(\"/network.json\", FILE_WRITE);",
+        "    if (!file) { logEvent(\"FS_ERR: SaveNet Open\"); return false; }",
+        "    if (serializeJson(doc, file) == 0) { file.close(); logEvent(\"FS_ERR: Write Err\"); return false; }",
+        "    file.close(); logEvent(\"Saved NetCfg for '\"+ssid+\"'\");",
+        "    return true;",
+        "}",
+        "",
+        "bool loadNetworkConfig(String& ssid, String& pass) {",
+        "    File file = SPIFFS.open(\"/network.json\", FILE_READ);",
+        "    if (!file) return false;",
+        "    StaticJsonDocument<128> doc;",
+        "    DeserializationError error = deserializeJson(doc, file);",
+        "    file.close();",
+        "    if (error) { logEvent(\"LoadFAIL: NetCfg JSON\"); return false; }",
+        "    ssid = doc[\"ssid\"].as<String>(); pass = doc[\"password\"].as<String>();",
+        "    return ssid.length() > 0;",
+        "}",
+        "",
+        "void handleSaveNetwork() {",
+        "    if (server.hasArg(\"ssid\") && server.hasArg(\"password\")) {",
+        "        String ssid = server.arg(\"ssid\"); String pass = server.arg(\"password\");",
+        "        if (saveNetworkConfig(ssid, pass)) {",
+        "            server.send(200, \"text/plain\", \"Success. Device will now reboot.\");",
+        "            delay(1000); ESP.restart();",
+        "        } else { server.send(500, \"text/plain\", \"Error: Failed to save config to internal memory.\"); }",
+        "    } else { server.send(400, \"text/plain\", \"Bad Request: Missing ssid or password.\"); }",
+        "}"
+    ]
+    return "\n".join(cpp_code)
+
+
+
+
+def generate_perform_rule_based_detection(graph, blueprint):
+    """
+    (Surgical Tool, AI-Aware) Forges the C++ logic for our classic,
+    rule-based anomaly detection system. It now uses the unified
+    'statusMessage' system, making it compatible with the final firmware architecture.
+    """
+    print(" -> Forging Rule-Based Detection logic...")
+    
+    body_lines = [
+        "// This function only runs if the system is in a state that uses rules.",
+        "// It is the fallback if AI is disabled or the system is degraded.",
+        "if (!calibrationComplete) { return; }",
+        "",
+        "bool is_imbalanced_this_cycle = false;",
+        "String anomaly_node_id = \"\";",
+        "",
+        "for (auto& n : Pipeline::NODES) {",
+        "    if (isnan(n.mean_balance_lps)) { continue; }",
+        "",
+        "    // In degraded mode, we do not use nodes connected to a faulty sensor",
+        "    bool node_is_compromised = false;",
+        "    if (currentSystemState == OPERATING_DEGRADED) {",
+        "        for (int i : n.inflow_sensor_indices) { if (Pipeline::SENSORS[i].is_permanently_faulty) node_is_compromised = true; }",
+        "        for (int i : n.outflow_sensor_indices) { if (Pipeline::SENSORS[i].is_permanently_faulty) node_is_compromised = true; }",
+        "        if (node_is_compromised) { continue; }",
+        "    }",
+        "",
+        "    // Calculate the real-time balance for the current node",
+        "    float current_balance = 0.0f;",
+        "    for (int i : n.inflow_sensor_indices) current_balance += Pipeline::SENSORS[i].filtered_rate_lps;",
+        "    for (int i : n.outflow_sensor_indices) current_balance -= Pipeline::SENSORS[i].filtered_rate_lps;",
+        "",
+        "    // Compare the deviation against the dynamic threshold",
+        "    float deviation = current_balance - n.mean_balance_lps;",
+        "    float threshold = max(abs(n.std_dev_balance_lps * ActiveTuning.deviation_std_dev_factor), ActiveTuning.near_zero_flow_lps);",
+        "",
+        "    if (abs(deviation) > threshold) {",
+        "        is_imbalanced_this_cycle = true;",
+        "        anomaly_node_id = n.id;",
+        "        break; // Process the first detected anomaly",
+        "    }",
+        "}",
+        "",
+        "// --- Diagnostic State Machine (using the new unified status system) ---",
+        "static int consecutive_imbalance_cycles = 0;",
+        "if (is_imbalanced_this_cycle) {",
+        "    consecutive_imbalance_cycles++;",
+        "    if (consecutive_imbalance_cycles >= ActiveTuning.leak_confirmation_cycles) {",
+        "        // If it's the first time confirming, log the event",
+        "        if (currentHealth != WARNING) { logEvent(\"Leak Detected @ \" + anomaly_node_id); }",
+        "        currentHealth = WARNING;",
+        "        statusMessage = \"Leak Detected @ \" + anomaly_node_id;",
+        "    }",
+        "} else {",
+        "    // If the system was in a warning state and is now balanced, log it and reset",
+        "    if (currentHealth == WARNING) { logEvent(\"System has returned to a balanced state.\"); }",
+        "    consecutive_imbalance_cycles = 0;",
+        "    currentHealth = HEALTHY;",
+        "    if (currentSystemState != OPERATING_DEGRADED) {",
+        "        statusMessage = \"System OK\";",
+        "    }",
+        "}",
+    ]
+    
+    return generate_full_cpp_function("performRuleBasedDetection", body_lines)
+
+
+
+# We need to add a helper for the state machine to keep the code clean
+###def generate_perform_detection_state_machine():
+    return [
+        "if (is_imbalanced_this_cycle) {",
+        "    driftConfirmCounter = 0;",
+        "    if (++leakConfirmCounter >= ActiveTuning.leak_confirmation_cycles) {",
+        "        if (!leakDetected) {",
+        "            // This sub-logic can be enhanced later for burst/roc",
+        "            leakLocation = \"Leak Detected @ \" + anomaly_node_id;",
+        "            logEvent(leakLocation);",
+        "        }",
+        "        leakDetected = true; currentHealth = WARNING;",
+        "    }",
+        "} else {",
+        "    if (leakDetected) logEvent(\"System Balanced\");",
+        "    leakConfirmCounter = 0; leakDetected = false;",
+        "    // TODO: Add drift detection logic here",
+        "    if (currentSystemState != OPERATING_DEGRADED) { leakLocation = \"System OK\"; currentHealth = HEALTHY; }",
+        "}",
+    ]
+
+
+
+def generate_reset_calibration_and_faults(graph, blueprint):
+    """
+    (Surgical Tool) Forges the C++ master reset function. This is called
+    on first boot without a saved state, or when commanded by the user
+    or the hardware failsafe button.
+    """
+    print(" -> Forging the master system reset function...")
+    
+    body_lines = [
+        "logEvent(\"System Reset Triggered\");",
+        "",
+        "// Reset learned statistics for all nodes",
+        "for(auto& n : Pipeline::NODES) {",
+        "    n.sum_X = 0; n.sum_X2 = 0;",
+        "    n.mean_balance_lps = NAN;",
+        "    n.std_dev_balance_lps = NAN;",
+        "}",
+        "",
+        "// Reset status and fault counters for all sensors",
+        "for(auto& s : Pipeline::SENSORS) {",
+        "    s.is_permanently_faulty = false;",
+        "    s.consecutive_fault_count = 0;",
+        "    s.filtered_rate_lps = 0.0f;",
+        "    s.raw_rate_lps = 0.0f;",
+        "    s.prev_filtered_rate_lps = NAN;",
+        "    s.stuck_counter = 0;",
+        "}",
+        "",
+        "// Reset global calibration and state machine variables",
+        "calibrationComplete = false;",
+        "calibrationSamplesCollected = 0;",
+        "calibFlowConfirmCycles = 0;",
+        "invalidSamplesDuringCalibration = 0;",
+        "currentSystemState = CALIBRATING;",
+        "currentHealth = HEALTHY;",
+        "statusMessage = \"Awaiting Calibration\";",
+    ]
+    
+    return generate_full_cpp_function("resetCalibrationAndFaults", body_lines)
+
+
+
+
+def generate_setup(graph, blueprint):
+    """
+    (Surgical Tool, AI-Aware & Purified) Forges the C++ setup() function, now
+    generating C++ compliant strings with correctly escaped newlines.
+    """
+    print(" -> Forging Setup Function (Purified AI-Aware Edition)...")
+    
+    ai_enabled = blueprint.get('ai_model', {}).get('enabled', False)
+
+    body_lines = [
+        "Serial.begin(115200); while(!Serial);",
+        # THE FIX: This f-string is now confirmed to generate a valid single-line C++ string.
+        f'Serial.println("\\n\\nBooting IPP v5.0 (AI: {"ENABLED" if ai_enabled else "DISABLED"})");',
+        "logEvent(\"Boot\");",
+        "",
+        "// --- Initialize Filesystem & Failsafe Button ---",
+        "pinMode(0, INPUT_PULLUP);",
+        "if (!SPIFFS.begin(true)) {",
+        "    Serial.println(\"FATAL: SPIFFS Mount Failed!\");",
+        "    while(true) delay(1000);",
+        "}",
+        "",
+        "// --- WiFi Connection Protocol ---",
+        "WiFi.mode(WIFI_STA);",
+        "WiFi.disconnect(true);",
+        "delay(100);",
+        "String saved_ssid, saved_pass;",
+        "if (loadNetworkConfig(saved_ssid, saved_pass)) {",
+        "    WiFi.begin(saved_ssid.c_str(), saved_pass.c_str());",
+        "    Serial.print(\"Connecting to '\" + saved_ssid + \"'...\");",
+        "    int connect_tries = 0;",
+        "    while (WiFi.status() != WL_CONNECTED && connect_tries < 20) {",
+        "        Serial.print(\".\");",
+        "        delay(500);",
+        "        connect_tries++;",
+        "    }",
+        "}",
+        "",
+        "// --- Check Connection & Start AP Mode if Needed ---",
+        "if (WiFi.status() != WL_CONNECTED) {",
+        # THE FIX: String is now a single line with '\\n' for the newline.
+        "    Serial.println(\"\\nConnection Failed. Starting AP for configuration.\");",
+        "    logEvent(\"NetFAIL: Starting AP\");",
+        "    WiFi.mode(WIFI_AP);",
+        "    WiFi.softAP(\"IntelliPipe_Setup\");",
+        "} else {",
+        # THE FIX: String is now a single line with '\\n' for the newline.
+        "    Serial.println(\"\\nSUCCESS!\");",
+        "    logEvent(\"NetOK: \" + WiFi.localIP().toString());",
+        "}",
+        "Serial.println(\"IP: \" + (WiFi.getMode() == WIFI_AP ? WiFi.softAPIP().toString() : WiFi.localIP().toString()));",
+        "",
+        "// --- Universal System Initializations ---",
+        "initializeTuningProfiles();",
+        "Pipeline::initializeGraph();",
+        "",
+        "// --- AI System Initialization (if enabled in blueprint) ---",
+        "if (true == " + ("true" if ai_enabled else "false") + ") {",
+        "    setup_tflm();",
+        "}",
+        "",
+        "// --- Load Saved State (if connected) ---",
+        "if (WiFi.getMode() == WIFI_STA) {",
+        "   if (!loadCalibrationData()) {",
+        "       resetCalibrationAndFaults(); // If no calibration exists, start one.",
+        "   }",
+        "}",
+        "",
+        "// --- Attach Sensor Interrupts ---",
+        generate_master_isr_array(graph),
+        "for(size_t i = 0; i < Pipeline::SENSORS.size(); ++i) {",
+        "    pinMode(Pipeline::SENSORS[i].pin, INPUT_PULLUP);",
+        "    attachInterrupt(digitalPinToInterrupt(Pipeline::SENSORS[i].pin), ISR_S_FN[i], RISING);",
+        "}",
+        "",
+        "// --- Start The Web Server and Define All Handlers ---",
+        "server.on(\"/\", HTTP_GET, handleRoot);",
+        "server.onNotFound(handleNotFound);",
+        "server.on(\"/data\", HTTP_GET, handleData);",
+        "server.on(\"/set_tuning\", HTTP_POST, handleTuningSwitch);",
+        "server.on(\"/save_network\", HTTP_POST, handleSaveNetwork);",
+        "server.on(\"/recalibrate\", HTTP_POST, [](){",
+        "    if (WiFi.getMode() == WIFI_STA) {",
+        "        SPIFFS.remove(\"/calibration.json\");",
+        "        logEvent(\"Web Recalibration Request\");",
+        "        resetCalibrationAndFaults();",
+        "        server.send(200, \"text/plain\", \"OK: Recalibration started.\");",
+        "    } else {",
+        "        server.send(403, \"text/plain\", \"Action not available in AP Mode.\");",
+        "    }",
+        "});",
+        "server.begin();",
+        "logEvent(\"Web Server Online\");",
+        "",
+        "lastUpdateTime = millis();",
+        "Serial.println(\"---- Setup Complete. System is now live. ----\");",
+    ]
+    return generate_full_cpp_function("setup", body_lines)
+
+
+
+def generate_loop(graph, blueprint):
+    """
+    (Surgical Tool, AI-Aware) Generates the main C++ loop(). It includes the
+    crucial AP mode guardrail and a state machine that correctly chooses
+    between the rule-based system and the AI Oracle.
+    """
+    print(" -> Forging the Main Loop (AI-Aware Edition)...")
+    
+    # Check the blueprint to see if the AI model is enabled for this build.
+    ai_enabled = blueprint.get('ai_model', {}).get('enabled', False)
+
+    body_lines = [
+        "// Always handle incoming web server requests, regardless of mode.",
+        "server.handleClient();",
+        "",
+        "// --- MODE GUARDRAIL: If in Access Point mode, do nothing further. ---",
+        "// This prevents the system from trying to monitor the pipeline while",
+        "// it's waiting for a user to provide WiFi credentials.",
+        "if (WiFi.getMode() == WIFI_AP) {",
+        "    return;",
+        "}",
+        "",
+        "// --- Hardware Failsafe: Long-press BOOT button for a factory reset ---",
+        "static unsigned long btn_press_time = 0;",
+        "static bool btn_was_pressed = false;",
+        "if (digitalRead(0) == LOW) { // BOOT button is active low",
+        "    if (!btn_was_pressed) {",
+        "        btn_press_time = millis();",
+        "        btn_was_pressed = true;",
+        "    }",
+        "} else {",
+        "    if (btn_was_pressed) {",
+        "        // Check how long the button was held upon release",
+        "        if (millis() - btn_press_time > 5000) { // 5-second long press",
+        "            logEvent(\"BTN: Full Factory Reset\");",
+        "            SPIFFS.remove(\"/calibration.json\"); // Forget learned baselines",
+        "            SPIFFS.remove(\"/network.json\");   // Forget WiFi credentials",
+        "            ESP.restart(); // Reboot into a clean state",
+        "        }",
+        "    }",
+        "    btn_was_pressed = false;",
+        "}",
+        "",
+        "// --- Main Processing Interval Timer ---",
+        "if (millis() - lastUpdateTime < ActiveTuning.update_interval_ms) {",
+        "    return; // Not time for the next update yet",
+        "}",
+        "lastUpdateTime = millis();",
+        "",
+        "// --- Core Data Processing Pipeline ---",
+        "updateFlowRatesAndValidity();",
+        "calculateFilteredFlowRates();",
+        "",
+        "// --- Master State Machine: The core brain of the device ---",
+        "switch (currentSystemState) {",
+        "    case CALIBRATING:",
+        "        handleCalibration();",
+        "        break;",
+        "",
+        "    case OPERATING_RULES:",
+        "    case OPERATING_DEGRADED:",
+        "        performRuleBasedDetection();",
+        "        break;",
+        "",
+        "    case AI_ACTIVE:",
+        # Conditionally generate a call to the AI or fallback to rules
+        f'        {"runInferenceAndInterpret();" if ai_enabled else "performRuleBasedDetection(); // AI disabled, using rules"}',
+        "        break;",
+        "",
+        "    case SENSOR_FAULT:",
+        "        currentHealth = FAULTED;",
+        "        // statusMessage is set by updateFlowRatesAndValidity()",
+        "        break;",
+        "",
+        "    case FAILED_CALIBRATION:",
+        "        statusMessage = \"Calibration FAILED\";",
+        "        currentHealth = WARNING;",
+        "        break;",
+        "",
+        "    case BOOTING:",
+        "        // Do nothing in the loop while booting, setup handles all.",
+        "        break;",
+        "}",
+    ]
+    return generate_full_cpp_function("loop", body_lines)
+
+
+
+
+
+# =========================================================================
+#             AI SURGICAL TOOLKIT (THE ORACLE'S IMPLANTER)
+# =========================================================================
+
+def inject_ai_model(graph, blueprint):
+    """
+    (AI Tool) Reads the model.h file specified in the blueprint and
+    injects its entire content into the C++ artifact.
+    """
+    print(" -> Implanting the Oracle's Brain (model.h)...")
+    ai_config = blueprint.get('ai_model', {})
+    if not ai_config.get('enabled', False):
+        return "// AI MODEL NOT INJECTED: AI is disabled in the blueprint."
+        
+    model_path = ai_config.get('model_file')
+    if not model_path:
+        raise ValueError("AI is enabled, but no 'model_file' was specified in the blueprint.")
+    
+    try:
+        with open(model_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except FileNotFoundError:
+        raise ValueError(f"AI MODEL FORGE FAILED: Could not find model file at '{model_path}'")
+    
+    
+    
+def generate_tflm_setup_and_globals(graph, blueprint):
+    """
+    (AI Tool - v3.0 Certified) Generates all necessary C++ globals
+    and the setup function for TFLM, with the user's fix applied.
+    """
+    print(" -> Forging the TFLM Life-Support System (v3.0 Certified)...")
+    
+    code_parts = {}
+
+    code_parts['includes'] = "\n".join([
+        '#include "tensorflow/lite/micro/micro_interpreter.h"',
+        '#include "tensorflow/lite/micro/all_ops_resolver.h"',
+        '#include "tensorflow/lite/micro/system_setup.h"',
+        '#include "tensorflow/lite/micro/micro_error_reporter.h"',
+        '#include "tensorflow/lite/schema/schema_generated.h"',
+    ])
+    
+    output_classes = blueprint.get('ai_model', {}).get('output_classes', [])
+    class_names_str = ", ".join([f'"{c}"' for c in output_classes])
+    
+    code_parts['globals'] = "\n".join([
+        "namespace tflm {",
+        "  tflite::ErrorReporter* error_reporter = nullptr;",
+        "  const tflite::Model* model = nullptr;",
+        "  tflite::MicroInterpreter* interpreter = nullptr;",
+        "  TfLiteTensor* input = nullptr;",
+        "  TfLiteTensor* output = nullptr;",
+        "  constexpr int kTensorArenaSize = 8 * 1024;",
+        "  uint8_t tensor_arena[kTensorArenaSize];",
+        f"  const char* CLASS_NAMES[] = {{{class_names_str}}};",
+        "  const int CLASS_COUNT = sizeof(CLASS_NAMES) / sizeof(CLASS_NAMES[0]);",
+        "}"
+    ])
+
+
+    setup_func_body = [
+        "    static tflite::MicroErrorReporter micro_error_reporter;",
+        "    tflm::error_reporter = &micro_error_reporter;",
+        "",
+        "    tflm::model = tflite::GetModel(g_model);",
+        "    if (tflm::model->version() != TFLITE_SCHEMA_VERSION) {",
+        "        TF_LITE_REPORT_ERROR(tflm::error_reporter, \"Model version mismatch!\");",
+        "        return;",
+        "    }",
+        "",
+        "    static tflite::AllOpsResolver resolver;",
+        "    static tflite::MicroInterpreter static_interpreter(tflm::model, resolver, tflm::tensor_arena, tflm::kTensorArenaSize, tflm::error_reporter);",
+        "    tflm::interpreter = &static_interpreter;",
+        "",
+        "    if (tflm::interpreter->AllocateTensors() != kTfLiteOk) {",
+        "        TF_LITE_REPORT_ERROR(tflm::error_reporter, \"AllocateTensors() failed.\");",
+        "        return;",
+        "    }",
+        "",
+        "    tflm::input = tflm::interpreter->input(0);",
+        "    tflm::output = tflm::interpreter->output(0);",
+        "    logEvent(\"AI: TFLM Initialized\");",
+    ]
+
+    code_parts['setup_func'] = generate_full_cpp_function("setup_tflm", setup_func_body)
+
+    return code_parts
+
+
+def generate_interpreter_function(graph, blueprint):
+    """
+    (AI Tool) Forges the C++ function that runs inference and interprets the results.
+    """
+    print(" -> Forging the Oracle's Mouthpiece (Interpreter)...")
+    num_features = len(graph['sensors_ordered']) + len(graph['balance_nodes'])
+    
+    body = [
+        "if (!tflm::interpreter || !tflm::input) {",
+        "    statusMessage = \"AI ERROR: Not Initialized\";",
+        "    currentHealth = FAULTED;",
+        "    return;",
+        "}",
+        "",
+        "// 1. Load live data from the Digital Twin into the model's input tensor",
+        f"if (tflm::input->dims->size != 2 || tflm::input->dims->data[1] != {num_features}) {{",
+        "    logEvent(\"AI_ERR: Input shape mismatch\");",
+        "    return;",
+        "}",
+        "",
+        "int feature_idx = 0;",
+        "for(const auto& s : Pipeline::SENSORS) {",
+        "    tflm::input->data.f[feature_idx++] = s.filtered_rate_lps;",
+        "}",
+        "for(const auto& n : Pipeline::NODES) {",
+        "    float balance = 0.0f;",
+        "    for(int i : n.inflow_sensor_indices) balance += Pipeline::SENSORS[i].filtered_rate_lps;",
+        "    for(int i : n.outflow_sensor_indices) balance -= Pipeline::SENSORS[i].filtered_rate_lps;",
+        "    tflm::input->data.f[feature_idx++] = balance;",
+        "}",
+        "",
+        "// 2. Run inference by invoking the TFLM interpreter",
+        "if (tflm::interpreter->Invoke() != kTfLiteOk) {",
+        "    logEvent(\"AI_ERR: Invoke Failed\");",
+        "    return;",
+        "}",
+        "",
+        "// 3. Find the highest probability from the output tensor",
+        "float max_prob = -1.0f;",
+        "int max_idx = -1;",
+        "for (int i = 0; i < tflm::CLASS_COUNT; ++i) {",
+        "    if (tflm::output->data.f[i] > max_prob) {",
+        "        max_prob = tflm::output->data.f[i];",
+        "        max_idx = i;",
+        "    }",
+        "}",
+        "",
+        "// 4. Translate the result into a human-readable diagnosis",
+        "if (max_idx != -1) {",
+        "    String diagnosis = tflm::CLASS_NAMES[max_idx];",
+        "    statusMessage = \"AI: \" + diagnosis + \" (\" + String(int(max_prob * 100)) + \"%)\";",
+        "    logEvent(statusMessage);",
+        "",
+        "    if (diagnosis != \"NORMAL\") {",
+        "        currentHealth = AI_DIAGNOSIS;",
+        "    } else {",
+        "        currentHealth = HEALTHY;",
+        "    }",
+        "} else {",
+        "    statusMessage = \"AI: Interpretation Error\";",
+        "}"
+    ]
+    return generate_full_cpp_function("runInferenceAndInterpret", body)
+
+
+
+
+
+
+
+def generate_master_isr_array(graph):
+    """Creates a C-style array of function pointers for the ISRs."""
+    num_sensors = len(graph['sensors_ordered'])
+    typedef = "typedef void (*ISR_FUNC)();"
+    isr_names = ", ".join([f"ISR_S{i}" for i in range(num_sensors)])
+    array_def = f"ISR_FUNC ISR_S_FN[{num_sensors}] = {{ {isr_names} }};"
+    return f"{typedef}\n{array_def}"
+
+
+# =========================================================================
+#                    MASTER ORCHESTRATOR
+# =========================================================================
+
+def run_master_orchestrator(blueprint, template):
+    """
+    (Gold Master v11.0 - Final Certified) Assembles the final firmware with a
+    corrected architecture, guaranteeing a successful build.
+    """
+    print("\n[1/3] Analyzing Blueprint...")
+    graph = build_system_graph(blueprint)
+    ai_enabled = blueprint.get('ai_model', {}).get('enabled', False)
+    
+    print(f"[2/3] Forging all C++ components in correct order (AI: {ai_enabled})")
+    master_code_list = []
+
+    # === STAGE 1: Data Structures and Globals (Must be first) ===
+    master_code_list.append("// === SECTION A: GLOBALS, DATA STRUCTURES, & NAMESPACES ===")
+    master_code_list.append(generate_tuning_system(blueprint))
+    if ai_enabled:
+        tflm_globals_code = generate_tflm_setup_and_globals(graph, blueprint)['globals']
+        master_code_list.append(tflm_globals_code.replace("µ_error_reporter", "micro_error_reporter"))
+    master_code_list.append(generate_digital_twin_namespace(graph, blueprint))
+    master_code_list.extend([
+        "WebServer server(80);",
+        "enum SystemHealth { HEALTHY, WARNING, FAULTED, AI_DIAGNOSIS };",
+        "enum SystemState { BOOTING, CALIBRATING, OPERATING_RULES, OPERATING_DEGRADED, FAILED_CALIBRATION, SENSOR_FAULT, AI_ACTIVE };",
+        "SystemState currentSystemState = BOOTING; SystemHealth currentHealth = HEALTHY;",
+        "unsigned long lastUpdateTime = 0; String statusMessage = \"Booting...\"; bool calibrationComplete = false;",
+        "int calibrationSamplesCollected = 0; int calibFlowConfirmCycles = 0; int invalidSamplesDuringCalibration = 0;",
+        "std::deque<String> eventLog;"
+    ])
+
+    # === STAGE 2: ALL Logic and Helper Functions (The core implementation) ===
+    master_code_list.append("\n// === SECTION B: ALL HELPER & LOGIC FUNCTIONS ===")
+    
+    profiles = blueprint.get('system_tuning_parameters',{}).get('profiles',[])
+    init_body = ["AllProfiles.clear();"]
+    for p in profiles:
+        vals = [f'"{v}"' if isinstance(v, str) else "true" if v else "false" if isinstance(v, bool) else f'{v:.4f}f' if isinstance(v, float) else str(v) for v in p.values()]
+        init_body.append(f"    AllProfiles.push_back({{{', '.join(vals)}}});")
+    init_body.append(f'    setTuningProfile("{blueprint.get("system_tuning_parameters",{}).get("default_profile_id")}");')
+    
+    # DEFINITIVE FIX: ALL functions are now generated with their full, complete bodies.
+    all_funcs = [
+        generate_full_cpp_function("logEvent", ['if(ActiveTuning.max_log_events<=0)return;', 'String logEntry=String(millis()/1000)+"s: "+eventMessage;', 'eventLog.push_back(logEntry);', 'while(eventLog.size()>(unsigned int)ActiveTuning.max_log_events){eventLog.pop_front();}'], "void", ["const String& eventMessage"]),
+        generate_full_cpp_function("setTuningProfile", ['for(const auto& p : AllProfiles){if(p.id==profileId){ActiveTuning=p;Serial.println("Tuning set to: "+profileId);logEvent("Tuning: "+profileId);return;}}', 'Serial.println("WARN: Tuning profile not found: "+profileId);'], "void", ["const String& profileId"]),
+        generate_full_cpp_function("initializeTuningProfiles", init_body),
+        generate_full_cpp_function("calculateNodeStatistics", ['if(calibrationSamplesCollected<2)return false;', 'double mean_d=node.sum_X/calibrationSamplesCollected;', 'double var_d=(node.sum_X2/calibrationSamplesCollected)-(mean_d*mean_d);', 'if(var_d<0.0)var_d=0.0;', 'node.mean_balance_lps=(float)mean_d;', 'node.std_dev_balance_lps=(float)sqrt(var_d);', 'return!(isnan(node.mean_balance_lps)||isnan(node.std_dev_balance_lps));'], "bool", ["Pipeline::BalanceNode& node"]),
+        generate_full_cpp_function("applyMedianFilter", ['if(sensor.history.empty())return sensor.raw_rate_lps;', 'sensor.history[sensor.history_index]=sensor.raw_rate_lps;', 'sensor.history_index=(sensor.history_index+1)%sensor.history.size();', 'std::vector<float> sorted_hist=sensor.history;', 'std::sort(sorted_hist.begin(),sorted_hist.end());', 'return sorted_hist[sorted_hist.size()/2];'], "float", ["Pipeline::Sensor& sensor"]),
+        # Assuming your other generators return a valid C++ function string.
+        generate_update_flow_rates(graph, blueprint), generate_calculate_filtered_flow_rates(graph, blueprint),
+        generate_reset_calibration_and_faults(graph, blueprint), generate_calculate_statistics(graph, blueprint),
+        generate_save_calibration(graph, blueprint), generate_load_calibration(graph, blueprint),
+        generate_handle_calibration(graph, blueprint), generate_perform_rule_based_detection(graph, blueprint),
+        generate_page_shell(graph, blueprint), generate_wifi_helpers(graph, blueprint),
+        generate_data_api_handler(graph, blueprint), generate_tuning_switch_handler(graph, blueprint),
+        generate_full_cpp_function("handleRoot", ['server.send(200, "text/html", generatePageShell());']),
+        generate_full_cpp_function("handleNotFound", ['server.send(404, "text/plain", "Not Found");']),
+    ]
+    
+    if ai_enabled:
+        ai_parts = generate_tflm_setup_and_globals(graph, blueprint)
+        all_funcs.append(ai_parts['setup_func'].replace( "µ_error_reporter","micro_error_reporter"))
+        all_funcs.append(generate_interpreter_function(graph, blueprint))
+    else:
+        all_funcs.append(generate_full_cpp_function("setup_tflm", ["/* AI DISABLED */"]))
+        all_funcs.append(generate_full_cpp_function("runInferenceAndInterpret", ["/* AI DISABLED */"]))
+
+    master_code_list.extend(all_funcs)
+    
+    # === STAGE 3: Main Entry Points and ISRs (Must be last) ===
+    master_code_list.append("\n// === SECTION C: ISRs & MAIN ENTRY POINTS ===")
+    master_code_list.append(generate_isrs(graph))
+    master_code_list.append(generate_setup(graph, blueprint))
+    master_code_list.append(generate_loop(graph, blueprint))
+    
+    # === FINAL ASSEMBLY ===
+    print("[3/3] Assembling final artifact...")
+    output_code = template
+    tflm_includes_code = ''
+    if ai_enabled:
+        # Use includes that match the new, stable TFLM library
+        tflm_includes_code = "\n".join([
+            '#include "tensorflow/lite/micro/micro_interpreter.h"', '#include "tensorflow/lite/micro/all_ops_resolver.h"',
+            '#include "tensorflow/lite/micro/system_setup.h"', '#include "tensorflow/lite/micro/micro_error_reporter.h"',
+            '#include "tensorflow/lite/schema/schema_generated.h"',
+        ])
+        output_code = output_code.replace('// __PYTHON_INJECT_AI_MODEL_H__', inject_ai_model(graph, blueprint))
+    else:
+        output_code = output_code.replace('// __PYTHON_INJECT_AI_MODEL_H__', '')
+    output_code = output_code.replace('// __PYTHON_INJECT_TFLM_INCLUDES__', tflm_includes_code)
+    
+    final_implementation = "\n\n".join(master_code_list)
+    output_code = output_code.replace('// __PYTHON_INJECT_MASTER_IMPLEMENTATION__', final_implementation)
+    
+    return output_code
+
+
+def validate_blueprint_task(bp):
+    """Task 1: Validates the blueprint's integrity."""
+    print("\n[Executing Task: 1 - Validate Blueprint]")
+    try:
+        # These tools will raise errors if the blueprint is malformed.
+        build_system_graph(bp)
+        generate_tuning_system(bp)
+        print("  -> ✅ Validation SUCCESSFUL. Blueprint is sound.")
+        return True
+    except Exception as e:
+        print(f"  -> ❌ VALIDATION FAILED: {e}")
+        return False
+
+def forge_firmware_task(bp):
+    """Task 2: Forges the final .ino artifact."""
+    print("\n[Executing Task: 2 - Forge Firmware]")
+    
+    try:
+        final_code = run_master_orchestrator(bp, USER_CPP_TEMPLATE)
+        # Use a safe default if project details are missing
+        project_name = bp.get('project_details', {}).get('name', 'output')
+        output_filename = f"{project_name}_FACTORY_BUILT.ino"
+        
+        with open(output_filename, 'w', encoding='utf-8') as f:
+            f.write(final_code)
+            
+        print(f"  -> ✅ Forge SUCCESSFUL. Artifact saved to '{output_filename}'.")
+        return True
+    except Exception as e:
+        print(f"  -> ❌ FORGE FAILED: {e}")
+        # Add traceback for detailed debugging in case of failure
+        import traceback
+        traceback.print_exc()
+        return False
+
+def generate_data_task(bp):
+    """Task 3: Launches the Data Factory."""
+    print("\n[Executing Task: 3 - Launch Data Factory]")
+    try:
+        # These values can be adjusted for more/less data generation
+        generate_training_dataset(bp, num_scenarios=4000, cycles_per_scenario=100)
+        print("  -> ✅ Data Factory run SUCCESSFUL.")
+        return True
+    except Exception as e:
+        print(f"  -> ❌ DATA FACTORY FAILED: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def main():
+    """
+    (The Interactive Factory v1.1 - Command Chaining)
+    Parses and executes a sequence of operations.
+    """
+    print("\n--- Intelligent Pipeline Configurator v4.2 (Batch Mode) ---")
+    print("\nAvailable Operations:")
+    print("  [1] Validate Blueprint")
+    print("  [2] Forge Production Firmware (.ino)")
+    print("  [3] Launch Data Factory (Generate training_data.csv)")
+
+    choice_str = input("\nPlease select operation(s) (e.g., '1', '2', '1-2-3'): ")
+
+    # --- INPUT VALIDATION --
+    # If the user just presses Enter, the stripped string will be empty.
+    if not choice_str.strip():
+        print("\n**ERROR**: No operation selected. Halting execution.")
+        return # Exit the function gracefully.
+    
+    tasks_to_run = choice_str.strip().split('-')
+    
+    task_map = {
+        '1': validate_blueprint_task,
+        '2': forge_firmware_task,
+        '3': generate_data_task
+    }
+
+    # --- Load Blueprint (Common to all operations) ---
+    try:
+        with open("SingleBranch_Test_v4.json", 'r', encoding='utf-8') as f:
+            blueprint = json.load(f)
+    except Exception as e:
+        print(f"**FATAL ERROR**: Could not load 'SingleBranch_Test_v4.json'. {e}"); return
+
+    # --- Sequential Execution with Short-Circuiting ---
+    for task_id in tasks_to_run:
+        task_func = task_map.get(task_id)
+        if not task_func:
+            print(f"\n**ERROR**: Invalid task ID '{task_id}'. Halting execution.")
+            return
+
+        success = task_func(blueprint)
+        if not success:
+            print("\n**Execution halted due to task failure.**")
+            return
+            
+    print("\n//-- Batch processing complete. --//")
+
+if __name__ == "__main__":
+    main()
+    print("\n--- Script execution finished. ---")
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+
+import json
+import os
+import re
+import inspect
+import random
+import csv
+import numpy as np
+
+# ==============================================================================
+# SECTION 1: COMMAND & CONTROL INTERFACE
+# ==============================================================================
+
+def validate_blueprint_task(bp):
+    """Task 1: Validates the blueprint's integrity."""
+    print("\n[Executing Task: 1 - Validate Blueprint]")
+    try:
+        # These tools will raise errors if the blueprint is malformed.
+        build_system_graph(bp)
+        generate_tuning_system(bp)
+        print("  -> ✅ Validation SUCCESSFUL. Blueprint is sound.")
+        return True
+    except Exception as e:
+        print(f"  -> ❌ VALIDATION FAILED: {e}")
+        return False
+
+def forge_firmware_task(bp):
+    """Task 2: Forges the final .ino artifact."""
+    print("\n[Executing Task: 2 - Forge Firmware]")
+    
+    try:
+        final_code = run_master_orchestrator(bp, USER_CPP_TEMPLATE)
+        # Use a safe default if project details are missing
+        project_name = bp.get('project_details', {}).get('name', 'output')
+        output_filename = f"{project_name}_FACTORY_BUILT.ino"
+        
+        with open(output_filename, 'w', encoding='utf-8') as f:
+            f.write(final_code)
+            
+        print(f"  -> ✅ Forge SUCCESSFUL. Artifact saved to '{output_filename}'.")
+        return True
+    except Exception as e:
+        print(f"  -> ❌ FORGE FAILED: {e}")
+        # Add traceback for detailed debugging in case of failure
+        import traceback
+        traceback.print_exc()
+        return False
+
+def generate_data_task(bp):
+    """Task 3: Launches the Data Factory."""
+    print("\n[Executing Task: 3 - Launch Data Factory]")
+    try:
+        # These values can be adjusted for more/less data generation
+        generate_training_dataset(bp, num_scenarios=4000, cycles_per_scenario=100)
+        print("  -> ✅ Data Factory run SUCCESSFUL.")
+        return True
+    except Exception as e:
+        print(f"  -> ❌ DATA FACTORY FAILED: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+def main():
+    """
+    (The Interactive Factory v1.1 - Command Chaining)
+    Parses and executes a sequence of operations.
+    """
+    print("\n--- Intelligent Pipeline Configurator v4.2 (Batch Mode) ---")
+    print("\nAvailable Operations:")
+    print("  [1] Validate Blueprint")
+    print("  [2] Forge Production Firmware (.ino)")
+    print("  [3] Launch Data Factory (Generate training_data.csv)")
+
+    choice_str = input("\nPlease select operation(s) (e.g., '1', '2', '1-2-3'): ")
+
+    # --- INPUT VALIDATION --
+    # If the user just presses Enter, the stripped string will be empty.
+    if not choice_str.strip():
+        print("\n**ERROR**: No operation selected. Halting execution.")
+        return # Exit the function gracefully.
+    
+    tasks_to_run = choice_str.strip().split('-')
+    
+    task_map = {
+        '1': validate_blueprint_task,
+        '2': forge_firmware_task,
+        '3': generate_data_task
+    }
+
+    # --- Load Blueprint (Common to all operations) ---
+    try:
+        with open("SingleBranch_Test_v4.json", 'r', encoding='utf-8') as f:
+            blueprint = json.load(f)
+    except Exception as e:
+        print(f"**FATAL ERROR**: Could not load 'SingleBranch_Test_v4.json'. {e}"); return
+
+    # --- Sequential Execution with Short-Circuiting ---
+    for task_id in tasks_to_run:
+        task_func = task_map.get(task_id)
+        if not task_func:
+            print(f"\n**ERROR**: Invalid task ID '{task_id}'. Halting execution.")
+            return
+
+        success = task_func(blueprint)
+        if not success:
+            print("\n**Execution halted due to task failure.**")
+            return
+            
+    print("\n//-- Batch processing complete. --//")
+
+# ==============================================================================
+# SECTION 2: THE DATA & SIMULATION FACTORY (ORACLE'S GENESIS)
+# ==============================================================================
+
+class PipelineSimulator:
+    """
+    (The Physics & Chaos Engine v2.1 - "Perfection")
+    Final version with unmistakable signatures for Burst and Drift events
+    to achieve near-perfect classification accuracy.
+    """
+    def __init__(self, graph, blueprint, tuning_profile):
+        self.graph = graph
+        self.blueprint = blueprint
+        self.tuning = tuning_profile
+        self.sensors = [{
+            'id': s['id'], 'pipe_id': s.get('pipe_id', 'unknown'), 'lps': 0.0,
+            'noise_factor': 1.0 + (random.random() - 0.5) * 0.05, # Tighter tolerance
+            'drift_offset': 0.0,
+            'dampening_factor': 1.0,
+            'lps_multiplier': 1.0,
+            'post_burst_chaos': 0.0 # NEW: Lingering effect after a burst
+        } for s in graph['sensors_ordered']]
+        self.nodes = [{'id': n['id'], 'balance': 0.0, 'inflows': n['inflows'], 'outflows': n['outflows']} for n in graph['balance_nodes']]
+
+    def run_simulation_scenario(self, duration_cycles, base_lps, event=None):
+        """Runs a full scenario, applying event lifecycles."""
+        if event:
+            # Schedule all effects before the simulation begins
+            self._schedule_event(event, duration_cycles)
+        
+        # Run the simulation cycle by cycle
+        for cycle in range(duration_cycles):
+            self._update_for_cycle(base_lps, cycle)
+            
+            for n in self.nodes:
+                n['balance'] = sum(self.sensors[i]['lps'] for i in n['inflows']) - sum(self.sensors[i]['lps'] for i in n['outflows'])
+            yield ([s['lps'] for s in self.sensors], [n['balance'] for n in self.nodes])
+            
+    def _schedule_event(self, event, duration_cycles):
+        """Pre-calculates and schedules all effects for a scenario."""
+        mode = event['type']
+        loc_id = event.get('location_id')
+        sev = event.get('severity', 1.0)
+        
+        # --- Persistent Failures ---
+        if mode in ['STEADY_LEAK', 'CLOG']:
+            target_pipe_idx = next((i for i,s in enumerate(self.sensors) if s['pipe_id'] == loc_id), None)
+            if target_pipe_idx is not None:
+                multiplier = 1.0 - (sev * 0.6) if mode == 'CLOG' else 1.0 - sev
+                dampening = 1.0 - (sev * 0.9) if mode == 'CLOG' else 1.0
+                for i in range(target_pipe_idx, len(self.sensors)):
+                    self.sensors[i]['lps_multiplier'] = multiplier
+                    self.sensors[i]['dampening_factor'] = dampening
+        
+        # --- Scheduled Events (Drift, Burst) ---
+        elif mode == 'SENSOR_DRIFT':
+            target_idx = next((i for i, s in enumerate(self.sensors) if s['id'] == loc_id), None)
+            if target_idx is not None:
+                self.sensors[target_idx]['drift_schedule'] = self._create_drift_schedule(sev, duration_cycles)
+        
+        elif mode == 'BURST_LEAK':
+            target_idx = next((i for i, s in enumerate(self.sensors) if s['pipe_id'] == loc_id), None)
+            if target_idx is not None:
+                # The pipe is now permanently broken after a burst
+                for i in range(target_idx, len(self.sensors)): self.sensors[i]['lps_multiplier'] = 0.1 * (1.0-sev)
+                # Schedule the one-time effects
+                self.sensors[target_idx]['initial_shock'] = {'type':'BURST', 'severity': sev}
+                # And schedule the aftershocks
+                for i in range(1, min(15, duration_cycles)): # Aftershocks for up to 15 cycles
+                    for s in self.sensors:
+                        s.setdefault('aftershocks', [0]*duration_cycles)[i] = random.uniform(-1,1) * sev * (0.4 / (i*0.5))
+
+        elif mode == 'BENIGN_ANOMALY':
+            for s in self.sensors: # Affects all sensors for one cycle
+                 s['initial_shock'] = {'type':'SLAM', 'severity': sev*0.6} # Less severe than a burst
+    
+    def _create_drift_schedule(self, severity, duration):
+        """Creates a gradual, then persistent, drift schedule."""
+        drift_magnitude = (self.tuning.get('near_zero_flow_lps', 0.05) * 6 * (severity - 0.5) * 2)
+        onset_duration = int(duration * 0.3) # Slower onset
+        schedule = []
+        for i in range(duration):
+            if i < onset_duration and onset_duration > 0:
+                schedule.append((drift_magnitude / onset_duration) * (i + 1))
+            else:
+                schedule.append(drift_magnitude)
+        return schedule
+    
+    def _update_for_cycle(self, base_lps, cycle_num):
+        """Applies all scheduled and persistent effects for a single cycle."""
+        # 1. Update Drift
+        for s in self.sensors:
+            if 'drift_schedule' in s and cycle_num < len(s['drift_schedule']):
+                s['drift_offset'] = s['drift_schedule'][cycle_num]
+        
+        # 2. Propagate base flow considering persistent reductions
+        current_lps = base_lps
+        for s in self.sensors:
+             current_lps *= s['lps_multiplier']
+             s['lps'] = max(0, current_lps)
+
+        # 3. Apply one-time shocks (Bursts, Valve Slams) for this cycle
+        for s in self.sensors:
+            if 'initial_shock' in s and cycle_num == 0:
+                shock = s['initial_shock']
+                if shock['type'] == 'BURST': s['lps'] *= 0.1 # Massive initial drop
+                s['lps'] += base_lps * 0.4 * random.uniform(-1, 1) * shock['severity']
+        
+        # 4. Apply lingering aftershocks and standard chaos noise
+        for s in self.sensors:
+            s['lps'] += s['drift_offset']
+            # Add aftershock effect if scheduled for this cycle
+            if 'aftershocks' in s and cycle_num < len(s['aftershocks']):
+                s['lps'] += base_lps * s['aftershocks'][cycle_num]
+
+            # Standard proportional noise, dampened by clogs
+            noise_mag = (s['lps'] * 0.02) + self.tuning.get('near_zero_flow_lps', 0.05) * 0.1
+            s['lps'] += random.normalvariate(0, noise_mag * s['noise_factor'] * s['dampening_factor'])
+            s['lps'] = max(0, s['lps'])
+            
+def generate_training_dataset(blueprint, num_scenarios=4000, cycles_per_scenario=100, filename="training_data_engineered.csv"):
+    """
+    (The Chief Cartographer v3.1 - "Oracle's Intuition")
+    Generates a dataset with engineered time-series features and corrected
+    NumPy operations for robust calculation.
+    """
+    print(f"\n[Data Factory] Forging ENGINEERED dataset for >90% accuracy target...")
+    
+    from collections import deque
+    WINDOWS = [5, 15]
+
+    event_types = [
+        {'type': 'NORMAL', 'label': 0}, {'type': 'BENIGN_ANOMALY', 'label': 0},
+        {'type': 'STEADY_LEAK', 'label': 1}, {'type': 'BURST_LEAK', 'label': 2},
+        {'type': 'CLOG', 'label': 3}, {'type': 'SENSOR_DRIFT', 'label': 4},
+    ]
+
+    with open(filename, 'w', newline='') as csvfile:
+        csv_writer = csv.writer(csvfile)
+        header_written = False
+
+        for i in range(num_scenarios):
+            tuning_profile = next((p for p in blueprint['system_tuning_parameters']['profiles'] if p['id'] == 'normal_balanced'), None)
+            graph = build_system_graph(blueprint)
+            sim = PipelineSimulator(graph, blueprint, tuning_profile)
+            
+            event = random.choice(event_types)
+            location_id = 'none'
+            if event['type'] == 'SENSOR_DRIFT':
+                if graph.get('sensors_ordered'): location_id = random.choice(graph['sensors_ordered'])['id']
+            elif event['type'] in ['STEADY_LEAK', 'BURST_LEAK', 'CLOG']:
+                if blueprint.get('pipes'): location_id = random.choice(blueprint['pipes'])['pipe_id']
+                
+            event_to_apply = {'type': event['type'], 'location_id': location_id, 'severity': random.uniform(0.2, 0.8)}
+            simulation_results = sim.run_simulation_scenario(cycles_per_scenario, random.uniform(2.0, 10.0), event_to_apply)
+
+            history_buffer = deque(maxlen=max(WINDOWS) + 1)
+
+            for sensor_lps, node_balances in simulation_results:
+                current_features = sensor_lps + node_balances
+                history_buffer.append(current_features)
+                
+                if len(history_buffer) < max(WINDOWS) + 1:
+                    continue
+
+                final_feature_row = list(history_buffer[-1])
+                history_np = np.array(history_buffer)
+
+                for window in WINDOWS:
+                    window_data = history_np[-window:]
+                    final_feature_row.extend(np.mean(window_data, axis=0))
+                    final_feature_row.extend(np.std(window_data, axis=0))
+
+                # === THE DEFINITIVE FIX IS HERE ===
+                # Use NumPy arrays for element-wise subtraction
+                roc = np.array(history_buffer[-1]) - np.array(history_buffer[-2])
+                final_feature_row.extend(roc)
+                # =================================
+
+                if not header_written:
+                    base_headers = [f's{i}' for i in range(len(sensor_lps))] + [f'n{i}' for i in range(len(node_balances))]
+                    new_headers = list(base_headers)
+                    for w in WINDOWS:
+                        new_headers.extend([f'{h}_mean_{w}' for h in base_headers])
+                        new_headers.extend([f'{h}_std_{w}' for h in base_headers])
+                    new_headers.extend([f'{h}_roc' for h in base_headers])
+                    csv_writer.writerow(new_headers + ['failure_label'])
+                    header_written = True
+                
+                csv_writer.writerow(final_feature_row + [event['label']])
+
+            if (i + 1) % 400 == 0: print(f"  -> Engineered scenario {i+1}/{num_scenarios}: {event['type']}")
+    
+    print(f"\n[Data Factory] ✅ SUCCESS: Engineered feature dataset saved as '{filename}'.")
+            
+
+# ==============================================================================
+# SECTION 3: CORE FACTORY ENGINES & UTILITIES
+# ==============================================================================
+
+USER_CPP_TEMPLATE = r"""// IntelliPipe Master C++ Template v8.0 "Purified Platinum"
+#include <FS.h>
+#include <SPIFFS.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <math.h>
+#include <vector>
+#include <deque>
+#include <algorithm>
+#include <numeric>
+#include <ArduinoJson.h>
+
+// __PYTHON_INJECT_TFLM_INCLUDES__
+// __PYTHON_INJECT_AI_MODEL_H__
+
+// ==========================================================================
+//               MASTER IMPLEMENTATION BLOCK (INJECTED)
+// ==========================================================================
+
+// __PYTHON_INJECT_MASTER_IMPLEMENTATION__
+"""
+def build_system_graph(bp):
+    """(Universal Topology Engine v1.1)
+    Analyzes a v4.0 blueprint and now correctly associates pipes with sensors.
+    """
+    print(" -> Executing Universal Topology Engine (v1.1)...")
+    nodes_map, pipes = {n['node_id']: n for n in bp.get('nodes', [])}, bp.get('pipes', [])
+    sensors_ordered, s_map = [], {}
+
+    # --- Pass 1: Sensor Indexing (REPAIRED) ---
+    for p in pipes:
+        if 'flow_sensor' in p:
+            s_data, s_id = p['flow_sensor'], p['flow_sensor'].get('sensor_id')
+            if not s_id or s_id in s_map: raise ValueError(f"Invalid sensor ID in pipe {p.get('pipe_id')}")
+            idx, label = len(sensors_ordered), s_data.get('label', s_id)
+            s_map[s_id] = idx
+            sensors_ordered.append({
+                'id': s_id,
+                'pin': s_data.get('gpio_pin'),
+                'k_factor': s_data.get('k_factor_ppl'),
+                'label': label,
+                'pipe_id': p.get('pipe_id') # <<<--- THE CRITICAL FIX IS HERE
+            })
+
+    # The rest of the function remains the same and is correct.
+    io = {nid: {'in': [], 'out': []} for nid in nodes_map}
+    for p in pipes:
+        if 'flow_sensor' in p:
+            idx = s_map[p['flow_sensor']['sensor_id']]
+            if p['source_node'] in io: io[p['source_node']]['out'].append(idx)
+            if p['target_node'] in io: io[p['target_node']]['in'].append(idx)
+
+    balance_nodes = [{'id': nid, 'inflows': sorted(d['in']), 'outflows': sorted(d['out'])} for nid, d in io.items() if d['in'] or d['out']]
+    
+    print(f" -> Topology analysis complete. Discovered {len(balance_nodes)} nodes and {len(sensors_ordered)} sensors.")
+    return {'sensors_ordered': sensors_ordered, 'balance_nodes': balance_nodes}
+
+
+def generate_full_cpp_function(name, body_lines, return_type="void", parameters=None):
+    """(Core Helper v2.0) Wraps C++ lines into a full function definition."""
+    params_str = ", ".join(parameters) if parameters else ""
+    lines = [f"{return_type} {name}({params_str}) {{"]
+    for line in body_lines: lines.append(f"    {line}")
+    lines.append("}")
+    return "\n".join(lines)
+
+
+def generate_master_isr_array(graph):
+    """Creates a C-style array of function pointers for the ISRs."""
+    num_sensors = len(graph['sensors_ordered'])
+    typedef = "typedef void (*ISR_FUNC)();"
+    isr_names = ", ".join([f"ISR_S{i}" for i in range(num_sensors)])
+    array_def = f"ISR_FUNC ISR_S_FN[{num_sensors}] = {{ {isr_names} }};"
+    return f"{typedef}\n{array_def}"
+
+# ==============================================================================
+# SECTION 4: THE C++ "SURGICAL TOOLKIT" (FORGING TOOLS)
+# ==============================================================================
+
+### 4.A: System Foundation & Structure Forges
+# ------------------------------------------------------------------------------
+def generate_tuning_system(bp):
+    """
+    (Surgical Tool v2.0) Generates ONLY the tuning profile data
+    structures and global variables.
+    """
+    cfg = bp.get('system_tuning_parameters', {})
+    profiles = cfg.get('profiles', [])
+    if not profiles: raise ValueError("No tuning profiles found in blueprint.")
+    keys = profiles[0].keys()
+    def get_cpp_type(val):
+        if isinstance(val, bool): return "bool"
+        if isinstance(val, int): return "int"
+        if isinstance(val, float): return "float"
+        return "String"
+    
+    s = ["struct TuningProfile {"]
+    for k in keys: s.append(f"    {get_cpp_type(profiles[0][k])} {k};")
+    s.extend([
+        "};", 
+        "std::vector<TuningProfile> AllProfiles;", 
+        "TuningProfile ActiveTuning;"
+    ])
+    return "\n".join(s)
+
+def generate_digital_twin_namespace(graph, bp):
+    """
+    (Surgical Tool: Digital Twin Forge v1.4 - Certified)
+    Generates C++ with explicit constructors and 'emplace_back' to guarantee
+    unambiguous, error-free compilation.
+    """
+    print(" -> Forging the C++ Digital Twin namespace (v1.4)...")
+    
+    cpp_lines = [
+        "namespace Pipeline {",
+        "  struct Sensor {",
+        "    String id; uint8_t pin; float k_factor; volatile int pulse_count = 0;",
+        "    float raw_rate_lps = 0.0f; float filtered_rate_lps = 0.0f;",
+        "    bool is_valid_this_cycle = true; bool is_permanently_faulty = false;",
+        "    int consecutive_fault_count = 0; float prev_filtered_rate_lps = NAN;",
+        "    std::vector<float> history; int history_index = 0; float prev_raw_rate_lps = 0.0f;",
+        "    int stuck_counter = 0; Sensor() : history(1, 0.0f) {}",
+        "  };",
+        "  struct BalanceNode {",
+        "    String id; std::vector<int> inflow_sensor_indices; std::vector<int> outflow_sensor_indices;",
+        "    float mean_balance_lps = NAN; float std_dev_balance_lps = NAN;",
+        "    double sum_X = 0; double sum_X2 = 0;",
+        "    BalanceNode(String _id, std::vector<int> _in, std::vector<int> _out) : id(_id), inflow_sensor_indices(_in), outflow_sensor_indices(_out) {}",
+        "  };",
+        "  struct Pipe {",
+        "    String id; int sensor_index; float length_m; float diameter_m;",
+        "    Pipe(String _id, int _idx, float _len, float _dia) : id(_id), sensor_index(_idx), length_m(_len), diameter_m(_dia) {}",
+        "  };",
+        "  std::vector<Sensor> SENSORS;",
+        "  std::vector<BalanceNode> NODES;",
+        "  std::vector<Pipe> PIPES;",
+        "  void initializeGraph() {",
+        "    SENSORS.clear(); NODES.clear(); PIPES.clear();",
+        "    // Initialize SENSORS vector from blueprint",
+    ]
+    
+    for s in graph['sensors_ordered']:
+        cpp_lines.append(f"    SENSORS.emplace_back(); SENSORS.back().id=\"{s['id']}\"; SENSORS.back().pin={s['pin']}; SENSORS.back().k_factor={s['k_factor']:.2f}f;")
+    
+    cpp_lines.append("    // Initialize NODES vector from blueprint (unambiguous syntax)")
+    for n in graph['balance_nodes']:
+        inflows_str = ','.join(map(str, n['inflows']))
+        outflows_str = ','.join(map(str, n['outflows']))
+        cpp_lines.append(f"    NODES.emplace_back(\"{n['id']}\", std::vector<int>{{{inflows_str}}}, std::vector<int>{{{outflows_str}}});")
+
+    cpp_lines.append("    // Initialize PIPES vector from blueprint (unambiguous syntax)")
+    all_pipes = bp.get('pipes', [])
+    sensor_map = {s['id']: i for i, s in enumerate(graph['sensors_ordered'])}
+    for p in all_pipes:
+        if 'flow_sensor' in p:
+            s_idx = sensor_map.get(p['flow_sensor']['sensor_id'], -1)
+            props = p.get('properties', {})
+            cpp_lines.append(f"    PIPES.emplace_back(\"{p['pipe_id']}\", {s_idx}, {props.get('length_m',0.0):.4f}f, {props.get('inner_diameter_m',0.0):.4f}f);")
+            
+    cpp_lines.append("    // Dynamically resize sensor history buffers based on active tuning profile")
+    cpp_lines.append("    for(auto& s : SENSORS) { s.history.resize(ActiveTuning.median_window_size, 0.0f); }")
+    cpp_lines.append("  }") 
+    cpp_lines.append("} // End namespace Pipeline")
+
+    return "\n".join(cpp_lines)
+
+def generate_isrs(graph):
+    return "\n".join([f"void IRAM_ATTR ISR_S{i}() {{ if ({i} < Pipeline::SENSORS.size()) Pipeline::SENSORS[{i}].pulse_count++; }}" for i, _ in enumerate(graph['sensors_ordered'])])
+
+
+### 4.B: Core System Logic Forges
+# ------------------------------------------------------------------------------
+def generate_update_flow_rates(graph, blueprint):
+    """
+    (Surgical Tool, Purified & Hardened) Forges sensor integrity logic.
+    This version is updated to use the strongly-typed 'enum class' syntax
+    for all state transitions.
+    """
+    print(" -> Forging Flow Rate & Validity logic (Enum Class Hardened)...")
+    
+    num_sensors = len(graph['sensors_ordered'])
+    
+    body_lines = [
+        f"const int SENSOR_COUNT = {num_sensors};",
+        "std::vector<int> p(SENSOR_COUNT);",
+        "",
+        "noInterrupts();",
+        "for(int i=0; i < SENSOR_COUNT; ++i) {",
+        "    p[i] = Pipeline::SENSORS[i].pulse_count;",
+        "    Pipeline::SENSORS[i].pulse_count = 0;",
+        "}",
+        "interrupts();",
+        "",
+        "float interval = (float)ActiveTuning.update_interval_ms / 1000.0f;",
+        "if (interval < 1e-6f) return;",
+        "",
+        "int new_faults_this_cycle = 0;",
+        "for (int i=0; i < SENSOR_COUNT; ++i) {",
+        "    auto& s = Pipeline::SENSORS[i];",
+        "    s.raw_rate_lps = (s.k_factor > 1e-6) ? ((float)p[i] / s.k_factor / interval) : 0.0f;",
+        "",
+        "    bool is_valid_now = true; String failReason = \"\";",
+        "    if (isnan(s.raw_rate_lps) || s.raw_rate_lps < 0 || s.raw_rate_lps > ActiveTuning.max_realistic_flow_lps) { is_valid_now = false; if(ActiveTuning.debug_validity_level > 0) failReason = \"Range\"; }",
+        "    if (abs(s.raw_rate_lps - s.prev_raw_rate_lps) < 1e-6) { s.stuck_counter++; } else { s.stuck_counter = 0; }",
+        "    if (s.stuck_counter >= ActiveTuning.stuck_sensor_cycles) { is_valid_now = false; if(ActiveTuning.debug_validity_level > 0) failReason = \"Stuck\"; }",
+        "    s.prev_raw_rate_lps = s.raw_rate_lps;",
+        "    s.is_valid_this_cycle = is_valid_now;",
+        "",
+        "    if (!s.is_valid_this_cycle) {",
+        "        s.consecutive_fault_count++;",
+        "        if (ActiveTuning.debug_validity_level > 0) {",
+        "            Serial.printf(\"DBG_VLD: ID=%s, Reason=%s, Raw=%.3f, FaultCount=%d\\n\", s.id.c_str(), failReason.c_str(), s.raw_rate_lps, s.consecutive_fault_count);",
+        "        }",
+        "    } else { s.consecutive_fault_count = 0; }",
+        "",
+        "    if (!s.is_permanently_faulty && s.consecutive_fault_count >= ActiveTuning.max_consecutive_faults) {",
+        "        s.is_permanently_faulty = true;",
+        "        logEvent(\"Permanent FAULT declared: \" + s.id);",
+        "        new_faults_this_cycle++;",
+        "    }",
+        "}",
+        "",
+        "// --- State Transition Logic for Degraded/Fault Modes (Hardened) ---",
+        "if (new_faults_this_cycle > 0) {",
+        "    int total_faulty_sensors = 0; String faulty_ids = \"\";",
+        "    for(const auto& s : Pipeline::SENSORS) { if(s.is_permanently_faulty) { total_faulty_sensors++; faulty_ids += s.id + \" \"; } }",
+        "    faulty_ids.trim();",
+        "",
+        "    if (total_faulty_sensors >= 2) {",
+        # <<<--- SURGICAL REPAIR ---<<<
+        "        currentSystemState = SystemState::SENSOR_FAULT;",
+        "        statusMessage = \"MULTI-SENSOR FAULT: \" + faulty_ids;",
+        "    } else if (total_faulty_sensors == 1) {",
+        # <<<--- SURGICAL REPAIR ---<<<
+        "        currentSystemState = SystemState::OPERATING_DEGRADED;",
+        "        statusMessage = \"DEGRADED MODE: Fault on \" + faulty_ids;",
+        "    }",
+        "}",
+    ]
+    
+    return generate_full_cpp_function("updateFlowRatesAndValidity", body_lines)
+
+
+def generate_calculate_filtered_flow_rates(graph, blueprint):
+    """
+    (Surgical Tool, Certified) Forges the C++ logic for filtering raw
+    sensor data using a median filter and an exponential moving average.
+    """
+    print(" -> Forging Filtered Flow Rate logic...")
+    
+    body_lines = [
+        "for (auto& s : Pipeline::SENSORS) {",
+        "    if (s.is_valid_this_cycle) {",
+        "        // First, apply a median filter to reject spikes",
+        "        float median_f = applyMedianFilter(s);",
+        "",
+        "        // Then, apply an EMA filter for smoothing",
+        "        if (isnan(s.prev_filtered_rate_lps)) {",
+        "            s.filtered_rate_lps = median_f;",
+        "        } else {",
+        "            s.filtered_rate_lps = (ActiveTuning.ema_alpha * median_f) + ((1.0f - ActiveTuning.ema_alpha) * s.prev_filtered_rate_lps);",
+        "        }",
+        "        s.filtered_rate_lps = max(0.0f, s.filtered_rate_lps);",
+        "    }",
+        "    s.prev_filtered_rate_lps = s.filtered_rate_lps;",
+        "}",
+    ]
+    return generate_full_cpp_function("calculateFilteredFlowRates", body_lines)
+
+
+def generate_handle_calibration(graph, blueprint):
+    """
+    (Surgical Tool, Hardened) Forges the live calibration logic. This
+    version is updated to use the strongly-typed 'enum class' syntax for all state transitions.
+    """
+    print(" -> Forging Calibration Handler (Enum Class Hardened)...")
+    
+    ai_enabled = blueprint.get('ai_model', {}).get('enabled', False)
+    # The 'success_state' now needs to include the class scope
+    success_state = "SystemState::AI_ACTIVE" if ai_enabled else "SystemState::OPERATING_RULES"
+
+    body_lines = [
+        # <<<--- SURGICAL REPAIR ---<<<
+        "if (currentSystemState != SystemState::CALIBRATING) return;",
+        "",
+        "// === Stage 1: Check for stable flow conditions before starting === ",
+        "bool flow_is_stable_and_present = !Pipeline::SENSORS.empty() && Pipeline::SENSORS[0].filtered_rate_lps >= ActiveTuning.calibration_min_start_flow_lps;",
+        "if (flow_is_stable_and_present) {",
+        "    if (calibFlowConfirmCycles < ActiveTuning.calib_start_confirm_cycles) calibFlowConfirmCycles++;",
+        "} else {",
+        "    calibFlowConfirmCycles = 0;",
+        "    if (calibrationSamplesCollected > 0) {",
+        "        logEvent(\"Calib Reset: Flow stopped or became unstable\");",
+        "        resetCalibrationAndFaults();",
+        "    }",
+        "    statusMessage = \"Calib: Waiting for stable flow...\";",
+        "    return;",
+        "}",
+        "if (calibFlowConfirmCycles < ActiveTuning.calib_start_confirm_cycles) {",
+        "    statusMessage = \"Calib: Confirming stable flow...\";",
+        "    return;",
+        "}",
+        "",
+        "// === Stage 2: Check for valid sensor readings during sample collection === ",
+        "bool all_sensors_are_valid_this_cycle = true;",
+        "for (const auto& s : Pipeline::SENSORS) {",
+        "    if (!s.is_valid_this_cycle) {",
+        "        all_sensors_are_valid_this_cycle = false;",
+        "        break;",
+        "    }",
+        "}",
+        "if (!all_sensors_are_valid_this_cycle) {",
+        "    invalidSamplesDuringCalibration++;",
+        "    if (invalidSamplesDuringCalibration > ActiveTuning.calibration_sample_count / 4) { ",
+        "        logEvent(\"Calib FAIL: Sensor readings too unstable\");",
+        # <<<--- SURGICAL REPAIR ---<<<
+        "        currentSystemState = SystemState::FAILED_CALIBRATION;",
+        "    }",
+        "    return;",
+        "}",
+        "",
+        "// === Stage 3: Collect samples if all checks pass === ",
+        "if (calibrationSamplesCollected == 0) logEvent(\"Calib: Collecting Samples\");",
+        "for (auto& n : Pipeline::NODES) {",
+        "    float balance = 0.0f;",
+        "    for (int i : n.inflow_sensor_indices) balance += Pipeline::SENSORS[i].filtered_rate_lps;",
+        "    for (int i : n.outflow_sensor_indices) balance -= Pipeline::SENSORS[i].filtered_rate_lps;",
+        "    if (!isnan(balance)) {",
+        "        n.sum_X += balance;",
+        "        n.sum_X2 += balance * balance;",
+        "    }",
+        "}",
+        "calibrationSamplesCollected++;",
+        "statusMessage = \"Calibrating: \" + String(calibrationSamplesCollected) + \"/\" + String(ActiveTuning.calibration_sample_count);",
+        "",
+        "// === Stage 4: Finalize calibration after collecting all samples === ",
+        "if (calibrationSamplesCollected >= ActiveTuning.calibration_sample_count) {",
+        "    if (calculateStatistics()) {",
+        "        logEvent(\"Calibration Complete.\");",
+        "        saveCalibrationData();",
+        # <<<--- SURGICAL REPAIR ---<<<
+        f"       currentSystemState = {success_state};",
+        "        statusMessage = \"System Operational\";",
+        "    } else {",
+        "        logEvent(\"Calib FAIL: Could not calculate statistics\");",
+        # <<<--- SURGICAL REPAIR ---<<<
+        "        currentSystemState = SystemState::FAILED_CALIBRATION;",
+        "    }",
+        "}",
+    ]
+    
+    return generate_full_cpp_function("handleCalibration", body_lines)
+
+
+def generate_calculate_statistics(graph, blueprint):
+    """
+    (Surgical Tool, Purified) Forges the function to calculate node
+    statistics. Now generates C++ compliant strings.
+    """
+    print(" -> Forging Node Statistics function (Purified)...")
+    
+    body_lines = [
+        "bool all_ok = true;",
+        "for (auto& n : Pipeline::NODES) {",
+        "    if (!calculateNodeStatistics(n)) {",
+        "        all_ok = false;",
+        "    }",
+        "    // This Serial.printf is for debugging purposes",
+        # THE FIX: The string is now on a single line with '\\n' for the newline.
+        "    Serial.printf(\"CALIB OK '%s': Mean=%.4f, StdDev=%.5f\\n\", n.id.c_str(), n.mean_balance_lps, n.std_dev_balance_lps);",
+        "}",
+        "calibrationComplete = all_ok;",
+        "return all_ok;",
+    ]
+    return generate_full_cpp_function("calculateStatistics", body_lines, "bool")
+
+
+def generate_save_calibration(graph, blueprint):
+    """
+    (Surgical Tool: The Foreman's Scribe)
+    Generates C++ to save the state of all nodes and tuning to a JSON file.
+    """
+    print(" -> Forging the Scribe: generate_save_calibration...")
+    
+    num_nodes = len(graph['balance_nodes'])
+    json_doc_size = 256 + (num_nodes * 128)
+    
+    body_lines = [
+        "if (!calibrationComplete) {",
+        "    logEvent(\"Save DENIED: Calib Incomplete\");",
+        "    return false;",
+        "}",
+        f"StaticJsonDocument<{json_doc_size}> doc;",
+        "",
+        "// --- Embed Metadata ---",
+        "doc[\"file_version\"] = \"1.1-Foreman\";",
+        f"doc[\"project_name\"] = \"{blueprint.get('project_details', {}).get('name', 'Unknown')}\";",
+        "doc[\"last_saved_ms\"] = millis();",
+        "",
+        "// --- Persist the System's Mind ---",
+        "JsonObject state = doc.createNestedObject(\"saved_state\");",
+        "state[\"active_tuning_profile_id\"] = ActiveTuning.id;",
+        "",
+        "JsonArray nodes = state.createNestedArray(\"calibrated_nodes\");",
+        "for (const auto& n : Pipeline::NODES) {",
+        "    if (isnan(n.mean_balance_lps) || isnan(n.std_dev_balance_lps)) continue;",
+        "    JsonObject node_obj = nodes.createNestedObject();",
+        "    node_obj[\"id\"] = n.id;",
+        "    node_obj[\"mean_lps\"] = serialized(String(n.mean_balance_lps, 6));",
+        "    node_obj[\"std_dev_lps\"] = serialized(String(n.std_dev_balance_lps, 6));",
+        "}",
+        "",
+        "// --- Commit Memory to Physical Storage ---",
+        "File file = SPIFFS.open(\"/calibration.json\", FILE_WRITE);",
+        "if (!file) { logEvent(\"SaveFAIL: FS Open\"); return false; }",
+        "",
+        "size_t bytes_written = serializeJson(doc, file);",
+        "file.close();",
+        "",
+        "if (bytes_written > 0) {",
+        "    logEvent(\"Calibration Saved\");",
+        "    return true;",
+        "} else {",
+        "    logEvent(\"SaveFAIL: Write Err\");",
+        "    return false;",
+        "}"
+    ]
+    return generate_full_cpp_function("saveCalibrationData", body_lines, "bool")
+
+def generate_load_calibration(graph, blueprint):
+    """
+    (Surgical Tool, AI-Aware & Hardened) Forges logic to restore saved calibration.
+    This version is updated to use the strongly-typed 'enum class' syntax.
+    """
+    print(" -> Forging Calibration Loader (Enum Class Hardened)...")
+    ai_enabled = blueprint.get('ai_model', {}).get('enabled', False)
+    
+    # The 'success_state' now needs to include the class scope
+    success_state = "SystemState::AI_ACTIVE" if ai_enabled else "SystemState::OPERATING_RULES"
+    json_doc_size = 256 + (len(graph['balance_nodes']) * 128)
+
+    body_lines = [
+        "File file = SPIFFS.open(\"/calibration.json\", FILE_READ);",
+        "if (!file || file.size() == 0) {",
+        "    if (file) file.close();",
+        "    logEvent(\"LoadInfo: No calibration file found.\");",
+        "    return false;",
+        "}",
+        "",
+        f"StaticJsonDocument<{json_doc_size}> doc;",
+        "DeserializationError error = deserializeJson(doc, file);",
+        "file.close();",
+        "if (error) {",
+        "    logEvent(\"LoadFAIL: JSON Parse. Deleting corrupted file.\");",
+        "    SPIFFS.remove(\"/calibration.json\");",
+        "    return false;",
+        "}",
+        "",
+        f"const char* expected_project = \"{blueprint.get('project_details', {}).get('name', 'Unknown')}\";",
+        "if (strcmp(doc[\"project_name\"], expected_project) != 0) {",
+        "    logEvent(\"LoadFAIL: Project Mismatch\");",
+        "    return false;",
+        "}",
+        "",
+        "logEvent(\"Saved calibration found. Restoring state...\");",
+        "setTuningProfile(doc[\"saved_state\"][\"active_tuning_profile_id\"].as<String>());",
+        "JsonArray nodes_array = doc[\"saved_state\"][\"calibrated_nodes\"];",
+        "int nodes_loaded = 0;",
+        "for (JsonObject saved_node : nodes_array) {",
+        "    const char* saved_id = saved_node[\"id\"];",
+        "    for (auto& ram_node : Pipeline::NODES) {",
+        "        if (ram_node.id == saved_id) {",
+        "            ram_node.mean_balance_lps = saved_node[\"mean_lps\"].as<float>();",
+        "            ram_node.std_dev_balance_lps = saved_node[\"std_dev_lps\"].as<float>();",
+        "            nodes_loaded++; break;",
+        "        }",
+        "    }",
+        "}",
+        "",
+        "if (nodes_loaded > 0) {",
+        "    calibrationComplete = true;",
+        # <<<--- SURGICAL REPAIR ---<<<
+        f"   currentSystemState = {success_state};",
+        "    statusMessage = \"System OK (Loaded Calib)\";",
+        "    logEvent(\"Loaded \" + String(nodes_loaded) + \" node states.\");",
+        "    return true;",
+        "}",
+        "logEvent(\"LoadWARN: File valid, but no matching nodes found.\");",
+        "return false;",
+    ]
+    return generate_full_cpp_function("loadCalibrationData", body_lines, "bool")
+
+def generate_perform_rule_based_detection(graph, blueprint):
+    """
+    (Surgical Tool, AI-Aware & Hardened) Forges the rule-based detection logic.
+    This version is updated to use the strongly-typed 'enum class' syntax.
+    """
+    print(" -> Forging Rule-Based Detection logic (Enum Class Hardened)...")
+    
+    body_lines = [
+        "if (!calibrationComplete) { return; }",
+        "",
+        "bool is_imbalanced_this_cycle = false;",
+        "String anomaly_node_id = \"\";",
+        "",
+        "for (auto& n : Pipeline::NODES) {",
+        "    if (isnan(n.mean_balance_lps)) { continue; }",
+        "",
+        "    bool node_is_compromised = false;",
+        # <<<--- SURGICAL REPAIR ---<<<
+        "    if (currentSystemState == SystemState::OPERATING_DEGRADED) {",
+        "        for (int i : n.inflow_sensor_indices) { if (Pipeline::SENSORS[i].is_permanently_faulty) node_is_compromised = true; }",
+        "        for (int i : n.outflow_sensor_indices) { if (Pipeline::SENSORS[i].is_permanently_faulty) node_is_compromised = true; }",
+        "        if (node_is_compromised) { continue; }",
+        "    }",
+        "",
+        "    float current_balance = 0.0f;",
+        "    for (int i : n.inflow_sensor_indices) current_balance += Pipeline::SENSORS[i].filtered_rate_lps;",
+        "    for (int i : n.outflow_sensor_indices) current_balance -= Pipeline::SENSORS[i].filtered_rate_lps;",
+        "",
+        "    float deviation = current_balance - n.mean_balance_lps;",
+        "    float threshold = max(abs(n.std_dev_balance_lps * ActiveTuning.deviation_std_dev_factor), ActiveTuning.near_zero_flow_lps);",
+        "",
+        "    if (abs(deviation) > threshold) {",
+        "        is_imbalanced_this_cycle = true;",
+        "        anomaly_node_id = n.id;",
+        "        break;",
+        "    }",
+        "}",
+        "",
+        "static int consecutive_imbalance_cycles = 0;",
+        "if (is_imbalanced_this_cycle) {",
+        "    consecutive_imbalance_cycles++;",
+        "    if (consecutive_imbalance_cycles >= ActiveTuning.leak_confirmation_cycles) {",
+        # <<<--- SURGICAL REPAIR ---<<<
+        "        if (currentHealth != SystemHealth::WARNING) { logEvent(\"Leak Detected @ \" + anomaly_node_id); }",
+        "        currentHealth = SystemHealth::WARNING;",
+        "        statusMessage = \"Leak Detected @ \" + anomaly_node_id;",
+        "    }",
+        "} else {",
+        # <<<--- SURGICAL REPAIR ---<<<
+        "    if (currentHealth == SystemHealth::WARNING) { logEvent(\"System has returned to a balanced state.\"); }",
+        "    consecutive_imbalance_cycles = 0;",
+        "    currentHealth = SystemHealth::HEALTHY;",
+        "    if (currentSystemState != SystemState::OPERATING_DEGRADED) {",
+        "        statusMessage = \"System OK\";",
+        "    }",
+        "}",
+    ]
+    
+    return generate_full_cpp_function("performRuleBasedDetection", body_lines)
+
+def generate_reset_calibration_and_faults(graph, blueprint):
+    """
+    (Surgical Tool, Hardened) Forges the C++ master reset function.
+    This version is updated to use the strongly-typed 'enum class' syntax.
+    """
+    print(" -> Forging the master system reset function (Enum Class Hardened)...")
+    
+    body_lines = [
+        "logEvent(\"System Reset Triggered\");",
+        "",
+        "// Reset learned statistics for all nodes",
+        "for(auto& n : Pipeline::NODES) {",
+        "    n.sum_X = 0; n.sum_X2 = 0;",
+        "    n.mean_balance_lps = NAN;",
+        "    n.std_dev_balance_lps = NAN;",
+        "}",
+        "",
+        "// Reset status and fault counters for all sensors",
+        "for(auto& s : Pipeline::SENSORS) {",
+        "    s.is_permanently_faulty = false;",
+        "    s.consecutive_fault_count = 0;",
+        "    s.filtered_rate_lps = 0.0f;",
+        "    s.raw_rate_lps = 0.0f;",
+        "    s.prev_filtered_rate_lps = NAN;",
+        "    s.stuck_counter = 0;",
+        "}",
+        "",
+        "// Reset global calibration and state machine variables",
+        "calibrationComplete = false;",
+        "calibrationSamplesCollected = 0;",
+        "calibFlowConfirmCycles = 0;",
+        "invalidSamplesDuringCalibration = 0;",
+        
+        # <<<--- SURGICAL REPAIR ---<<<
+        "currentSystemState = SystemState::CALIBRATING;",
+        "currentHealth = SystemHealth::HEALTHY;",
+        # --- END OF REPAIR ---
+
+        "statusMessage = \"Awaiting Calibration\";",
+    ]
+    
+    return generate_full_cpp_function("resetCalibrationAndFaults", body_lines)
+
+### 4.C: User Interface, Web Handlers, and I/O Forges
+# ------------------------------------------------------------------------------
+def generate_page_shell(graph, blueprint):
+    """
+    (Surgical Tool: State-Aware Visualizer v3.2 - Stabilized)
+    Generates the complete, state-aware web page. This version uses a robust
+    single-block approach to eliminate all syntax errors and is readable.
+    """
+    print(" -> Forging the State-Aware Web UI (Stabilized)...")
+
+    # --- PART 1: DYNAMICALLY GENERATE TOPOLOGY-SPECIFIC ELEMENTS ---
+
+    # Calculate Node Positions (Robust Layout)
+    node_positions, x_max, y_max = {}, 100, 150
+    node_map = {n['id']: n for n in graph['balance_nodes']}
+    root_nodes = sorted([n['id'] for n in graph['balance_nodes'] if not n['inflows']])
+    processed_nodes, level = set(), 0
+    nodes_in_level = root_nodes
+    while nodes_in_level:
+        x = 100 + (level * 220)
+        y, x_max = 100, max(x_max, x + 50)
+        for i, node_id in enumerate(nodes_in_level):
+            if node_id not in processed_nodes:
+                node_positions[node_id] = {'x': x, 'y': y}
+                y += 120
+                y_max, processed_nodes = max(y_max, y), processed_nodes | {node_id}
+        next_level_nodes = []
+        for node_id in nodes_in_level:
+            for outflow_idx in node_map.get(node_id, {}).get('outflows', []):
+                pipe_id = next((s['pipe_id'] for s in graph['sensors_ordered'] if s['id'] == graph['sensors_ordered'][outflow_idx]['id']), None)
+                target_pipe = next((p for p in blueprint['pipes'] if p.get('pipe_id') == pipe_id), None)
+                if target_pipe and target_pipe['target_node'] not in processed_nodes:
+                    next_level_nodes.append(target_pipe['target_node'])
+        nodes_in_level, level = sorted(list(set(next_level_nodes))), level + 1
+
+    # Forge SVG Elements
+    svg_pipes_html, svg_nodes_html, svg_labels_html = "", "", ""
+    for p in blueprint.get('pipes', []):
+        pos1, pos2 = node_positions.get(p['source_node']), node_positions.get(p['target_node'])
+        if pos1 and pos2:
+            sensor_id = p.get('flow_sensor', {}).get('sensor_id', '')
+            svg_pipes_html += f'<line id="pipe-viz-{sensor_id}" x1="{pos1["x"]}" y1="{pos1["y"]}" x2="{pos2["x"]}" y2="{pos2["y"]}" class="pipe" />'
+    for node_id, pos in node_positions.items():
+        svg_nodes_html += f'<circle id="node-viz-{node_id}" cx="{pos["x"]}" cy="{pos["y"]}" r="15" class="node" />'
+        svg_labels_html += f'<text x="{pos["x"]}" y="{pos["y"] + 35}" class="label">{node_id}</text>'
+    pipeline_vis_html = f'<svg width="100%" height="{y_max}" viewBox="0 0 {x_max + 100} {y_max + 50}"><g>{svg_pipes_html}</g><g>{svg_nodes_html}</g><g>{svg_labels_html}</g></svg>'
+
+    # Forge Sensor and Control Cards
+    sensor_cards_html = "".join([f'<div class="data-box" id="sensor-{s["id"]}"><h3>{s.get("label", s["id"]).upper()}</h3><p class="data-val">--.--</p><small>L/min</small><span class="status-badge">--</span></div>' for s in graph['sensors_ordered']])
+    tuning_options_html = "".join([f'<option value="{p["id"]}">{p.get("label", p["id"])}</option>' for p in blueprint.get('system_tuning_parameters', {}).get('profiles', [])])
+
+    # --- PART 2: ASSEMBLE THE HTML PAGE COMPONENTS ---
+    # These are the reusable building blocks of our UI.
+    
+    # Define a clean CSS block. Using a triple-quoted string handles all characters safely.
+    css_block = r"""
+    body,html{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,sans-serif;background-color:#1a1a1a;color:#e0e0e0}
+    .container{padding:10px} .status-banner{padding:15px;text-align:center;font-weight:700;margin-bottom:10px;border-radius:8px;background-color:#2c3e50;color:#fff;transition:background-color .3s ease}
+    .grid-container{display:grid;grid-template-columns:1fr;gap:20px} @media(min-width:1024px){.grid-container{grid-template-columns:3fr 1fr}}
+    .card{background-color:#2c2c2c;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,.5)} h1,h2{color:#4a8df3;border-bottom:1px solid #4a8df3;padding-bottom:10px;margin-top:0}
+    .data-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:15px} .data-box{background-color:#3b3b3b;padding:15px;border-radius:6px;text-align:center}
+    .data-box h3{margin:0 0 5px;font-size:1em;color:#a1c4fd} .data-val{font-size:2em;font-weight:700;margin:0} .status-badge{font-size:.8em;padding:3px 8px;border-radius:10px;background-color:#555}
+    .pipeline-viz svg{width:100%;height:auto} .pipe{stroke:#4a8df3;stroke-width:8;transition:stroke .3s ease}.pipe.fault{stroke:#ffc400}.pipe.sensor-fault{stroke:#e53935;stroke-dasharray:10 5;animation:d 1s linear infinite}
+    .node{fill:#2c3e50;stroke:#a1c4fd;stroke-width:3;transition:all .3s ease}.node.fault{fill:#c62828;animation:p .8s infinite alternate}
+    .label{fill:#e0e0e0;font-size:14px;font-weight:700;text-anchor:middle;user-select:none}
+    label,input,select,button{display:block;width:100%;margin-bottom:10px;box-sizing:border-box} input,select,button{padding:10px;border:1px solid #555;border-radius:4px;background-color:#3b3b3b;color:#e0e0e0;font-size:1em}
+    button{background-color:#4a8df3;cursor:pointer;font-weight:700;border:0} button:hover{background-color:#5a9eff}
+    #event-log{max-height:200px;overflow-y:auto;background-color:#1a1a1a;padding:10px;border-radius:4px;font-size:.9em;line-height:1.5}
+    @keyframes p{to{transform:scale(1.1);stroke-width:5px}} @keyframes d{to{stroke-dashoffset:15}}
+    """
+    
+    # Define a clean JavaScript block.
+    js_block = r"""
+    function fetchData(){fetch("/data").then(r=>r.json()).then(d=>{document.getElementById("status-banner").textContent=d.status_message;const t=document.getElementById("tuning-selector");t&&(t.value=d.active_tuning_profile_id);d.sensors.forEach(s=>{const e=document.getElementById("sensor-"+s.id);e&&(e.querySelector(".data-val").textContent=s.lpm.toFixed(1),e.querySelector(".status-badge").textContent=s.status)});document.querySelectorAll("[id^=node-viz-],[id^=pipe-viz-]").forEach(e=>e.classList.remove("fault","sensor-fault"));const s=d.status_message;if(s){if(s.includes("@")){const t=s.split("@")[1].trim();document.getElementById("node-viz-"+t)?.classList.add("fault")}else if(s.includes("DEGRADED MODE")){const t=s.split("on")[1].trim().split(" ")[0];document.getElementById("pipe-viz-"+t)?.classList.add("sensor-fault")}}document.getElementById("event-log").innerHTML=d.event_log.map(e=>`<div>${e}</div>`).reverse().join("")})}
+    function handleNetSave(e){e.preventDefault();const t=e.target,s=document.getElementById("net-status");s.textContent="Saving...",fetch("/save_network",{method:"POST",body:new URLSearchParams(new FormData(t))}).then(e=>{if(!e.ok)throw new Error("HTTP status "+e.status);s.style.color="green",s.textContent="Success! Device is rebooting..."}).catch(e=>{s.style.color="red",s.textContent="Error: "+e.message})}
+    function triggerRecalibration(){confirm("This will erase current calibration and restart the device. Proceed?")&&fetch("/recalibrate",{method:"POST"})}
+    function setTuning(){const e=document.getElementById("tuning-selector").value;fetch("/set_tuning?profile="+e,{method:"POST"})}
+    document.addEventListener("DOMContentLoaded",()=>{document.getElementById("net-form")?.addEventListener("submit",handleNetSave);document.getElementById("tuning-selector")?.addEventListener("change",setTuning);document.getElementById("status-banner")&&(fetchData(),setInterval(fetchData,2e3))});
+    """
+
+    # Assemble HTML partials
+    network_card = r'<div class="card"><h2>Network Configuration</h2><form id="net-form"><p>Connect the device to a new WiFi network.</p><label for="ssid">SSID:</label><input type="text" id="ssid" name="ssid" required><label for="password">Password:</label><input type="password" name="password"><button type="submit">Save & Reboot</button></form><p id="net-status"></p></div>'
+    controls_card = f'<div class="card"><h2>Controls</h2><label for="tuning-selector">Tuning Profile:</label><select id="tuning-selector">{tuning_options_html}</select><button onclick="triggerRecalibration()">Force Recalibration</button></div>'
+
+    # Assemble full page bodies
+    dashboard_body = f'<div class="container"><header><h1>IntelliPipe™ Dashboard</h1><div class="status-banner" id="status-banner">...</div></header><main class="grid-container"><section class="main-content"><h2>Sensors</h2><div class="data-grid">{sensor_cards_html}</div><h2>Visualization</h2><div class="pipeline-viz">{pipeline_vis_html}</div></section><aside class="sidebar">{controls_card}{network_card}<div class="card"><h2>Event Log</h2><div id="event-log"></div></div></aside></main></div>'
+    config_body = f'<div class="container"><header><h1>IntelliPipe™ Setup</h1></header>{network_card}</div>'
+    
+    # --- PART 3: GENERATE THE FINAL C++ STATE MACHINE ---
+    # This logic uses simple, robust string concatenation to build the final return value.
+    
+    # Create the config-only page string
+    config_page_string = '<!DOCTYPE html><html lang="en"><head><title>Setup</title><style>' + css_block + '</style></head><body>' + config_body + '<script>' + js_block + '</script></body></html>'
+
+    # Create the full dashboard page string
+    dashboard_page_string = '<!DOCTYPE html><html lang="en"><head><title>IntelliPipe</title><style>' + css_block + '</style></head><body>' + dashboard_body + '<script>' + js_block + '</script></body></html>'
+
+    # Build the C++ function body
+    body_lines = [
+        "    if (WiFi.getMode() == WIFI_AP) {",
+        "        // In AP Mode, serve the minimal configuration page.",
+        '        return R"raw(' + config_page_string + ')raw";',
+        "    } else {",
+        "        // In normal connected mode, serve the full dashboard.",
+        '        return R"raw(' + dashboard_page_string + ')raw";',
+        "    }",
+    ]
+
+    return generate_full_cpp_function("generatePageShell", body_lines, "String")
+
+
+def generate_wifi_helpers(graph, blueprint):
+    """
+    (Integrated UI Tool) Forges lean C++ helpers for saving/loading network
+    credentials and handling the UI save request.
+    """
+    print(" -> Forging lean WiFi Helpers...")
+    cpp_code = [
+        "bool saveNetworkConfig(const String& ssid, const String& pass) {",
+        "    StaticJsonDocument<128> doc;",
+        "    doc[\"ssid\"] = ssid; doc[\"password\"] = pass;",
+        "    File file = SPIFFS.open(\"/network.json\", FILE_WRITE);",
+        "    if (!file) { logEvent(\"FS_ERR: SaveNet Open\"); return false; }",
+        "    if (serializeJson(doc, file) == 0) { file.close(); logEvent(\"FS_ERR: Write Err\"); return false; }",
+        "    file.close(); logEvent(\"Saved NetCfg for '\"+ssid+\"'\");",
+        "    return true;",
+        "}",
+        "",
+        "bool loadNetworkConfig(String& ssid, String& pass) {",
+        "    File file = SPIFFS.open(\"/network.json\", FILE_READ);",
+        "    if (!file) return false;",
+        "    StaticJsonDocument<128> doc;",
+        "    DeserializationError error = deserializeJson(doc, file);",
+        "    file.close();",
+        "    if (error) { logEvent(\"LoadFAIL: NetCfg JSON\"); return false; }",
+        "    ssid = doc[\"ssid\"].as<String>(); pass = doc[\"password\"].as<String>();",
+        "    return ssid.length() > 0;",
+        "}",
+        "",
+        "void handleSaveNetwork() {",
+        "    if (server.hasArg(\"ssid\") && server.hasArg(\"password\")) {",
+        "        String ssid = server.arg(\"ssid\"); String pass = server.arg(\"password\");",
+        "        if (saveNetworkConfig(ssid, pass)) {",
+        "            server.send(200, \"text/plain\", \"Success. Device will now reboot.\");",
+        "            delay(1000); ESP.restart();",
+        "        } else { server.send(500, \"text/plain\", \"Error: Failed to save config to internal memory.\"); }",
+        "    } else { server.send(400, \"text/plain\", \"Bad Request: Missing ssid or password.\"); }",
+        "}"
+    ]
+    return "\n".join(cpp_code)
+
+
+def generate_data_api_handler(graph, blueprint):
+    """
+    (Surgical Tool, Platinum Certified) Forges the /data API endpoint. This
+    version is hardened for enum classes and modernized to the ArduinoJson v7 API.
+    """
+    print(" -> Forging Data API (Hardened & Modernized)...")
+    json_doc_size = 512 + (len(graph['sensors_ordered']) * 64) + (len(graph['balance_nodes']) * 96) + (len(blueprint.get('system_tuning_parameters', {})['profiles']) * 128)
+
+    body_lines = [
+        f"JsonDocument doc;", # Use modern, non-static JsonDocument
+        
+        # Explicitly cast enum class types to int for JSON serialization
+        "doc[\"system_state\"] = static_cast<int>(currentSystemState);",
+        "doc[\"system_health\"] = static_cast<int>(currentHealth);",
+        
+        "doc[\"status_message\"] = statusMessage;",
+        "doc[\"uptime_seconds\"] = millis() / 1000;",
+        "doc[\"active_tuning_profile_id\"] = ActiveTuning.id;",
+        
+        # <<<--- ARDUINOJSON V7 API MODERNIZATION ---<<<
+        "JsonArray profiles = doc[\"available_tuning_profiles\"].to<JsonArray>();",
+        "for (const auto& p : AllProfiles) {",
+        "    JsonObject prof = profiles.add<JsonObject>();",
+        "    prof[\"id\"] = p.id;",
+        "    prof[\"label\"] = p.label;",
+        "}",
+        "JsonArray sensors = doc[\"sensors\"].to<JsonArray>();",
+        "for (const auto& s : Pipeline::SENSORS) {",
+        "    JsonObject o = sensors.add<JsonObject>();",
+        "    o[\"id\"]=s.id; o[\"lpm\"]=s.filtered_rate_lps*60.0f; o[\"status\"]=s.is_permanently_faulty?\"FAULT\":(s.is_valid_this_cycle?\"VALID\":\"INVALID\");",
+        "}",
+        "JsonArray nodes = doc[\"nodes\"].to<JsonArray>();",
+        "for (const auto& n : Pipeline::NODES) {",
+        "    JsonObject o = nodes.add<JsonObject>();",
+        "    o[\"id\"]=n.id; o[\"mean_lps\"]=n.mean_balance_lps; o[\"std_dev_lps\"]=n.std_dev_balance_lps;",
+        "}",
+        "JsonArray events = doc[\"event_log\"].to<JsonArray>();",
+        # --- END OF MODERNIZATION ---
+        
+        "for (const auto& log : eventLog) { events.add(log); }",
+        "String output; serializeJson(doc, output);",
+        "server.sendHeader(\"Access-Control-Allow-Origin\", \"*\");",
+        "server.send(200, \"application/json\", output);",
+    ]
+    return generate_full_cpp_function("handleData", body_lines)
+
+def generate_tuning_switch_handler(graph, blueprint):
+    """(Surgical Tool) Generates the handler for /set_tuning."""
+    body_lines = [
+        "if (server.hasArg(\"profile\")) {",
+        "    String profile_id = server.arg(\"profile\");",
+        "    setTuningProfile(profile_id);",
+        "    server.send(200, \"text/plain\", \"OK, tuning set to \" + profile_id);",
+        "} else {",
+        "    server.send(400, \"text/plain\", \"Bad Request: 'profile' argument missing\");",
+        "}",
+    ]
+    return generate_full_cpp_function("handleTuningSwitch", body_lines)
+
+def generate_recalibrate_handler(graph, blueprint):
+    """
+    (Surgical Tool, Certified) Forges the C++ logic for the /recalibrate
+    web handler, including a safety check for AP mode.
+    """
+    print(" -> Forging Recalibrate Handler...")
+    
+    body = [
+        "if (WiFi.getMode() == WIFI_STA) {",
+        "    logEvent(\"Web Recalibration Request\");",
+        "    SPIFFS.remove(\"/calibration.json\"); // Remove the old calibration",
+        "    resetCalibrationAndFaults(); // Reset the system to a clean, calibrating state",
+        "    server.send(200, \"text/plain\", \"OK: Recalibration process initiated.\");",
+        "} else {",
+        "    // This action should not be possible when in AP setup mode.",
+        "    server.send(403, \"text/plain\", \"Action not available in AP Mode.\");",
+        "}",
+    ]
+    return generate_full_cpp_function("handleRecalibrate", body)
+
+
+### 4.D: AI Model & TFLM Integration Forges
+# ------------------------------------------------------------------------------
+def inject_ai_model(graph, blueprint):
+    """
+    (AI Tool) Reads the model.h file specified in the blueprint and
+    injects its entire content into the C++ artifact.
+    """
+    print(" -> Implanting the Oracle's Brain (model.h)...")
+    ai_config = blueprint.get('ai_model', {})
+    if not ai_config.get('enabled', False):
+        return "// AI MODEL NOT INJECTED: AI is disabled in the blueprint."
+        
+    model_path = ai_config.get('model_file')
+    if not model_path:
+        raise ValueError("AI is enabled, but no 'model_file' was specified in the blueprint.")
+    
+    try:
+        with open(model_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except FileNotFoundError:
+        raise ValueError(f"AI MODEL FORGE FAILED: Could not find model file at '{model_path}'")
+    
+def generate_tflm_setup_and_globals(graph, blueprint):
+    """
+    (AI Tool - v3.0 Certified) Generates all necessary C++ globals
+    and the setup function for TFLM, with the user's fix applied.
+    """
+    print(" -> Forging the TFLM Life-Support System (v3.0 Certified)...")
+    
+    code_parts = {}
+
+    code_parts['includes'] = "\n".join([
+        '#include "tensorflow/lite/micro/micro_interpreter.h"',
+        '#include "tensorflow/lite/micro/all_ops_resolver.h"',
+        '#include "tensorflow/lite/micro/system_setup.h"',
+        '#include "tensorflow/lite/micro/micro_error_reporter.h"',
+        '#include "tensorflow/lite/schema/schema_generated.h"',
+    ])
+    
+    output_classes = blueprint.get('ai_model', {}).get('output_classes', [])
+    class_names_str = ", ".join([f'"{c}"' for c in output_classes])
+    
+    code_parts['globals'] = "\n".join([
+        "namespace tflm {",
+        "  tflite::ErrorReporter* error_reporter = nullptr;",
+        "  const tflite::Model* model = nullptr;",
+        "  tflite::MicroInterpreter* interpreter = nullptr;",
+        "  TfLiteTensor* input = nullptr;",
+        "  TfLiteTensor* output = nullptr;",
+        "  constexpr int kTensorArenaSize = 8 * 1024;",
+        "  uint8_t tensor_arena[kTensorArenaSize];",
+        f"  const char* CLASS_NAMES[] = {{{class_names_str}}};",
+        "  const int CLASS_COUNT = sizeof(CLASS_NAMES) / sizeof(CLASS_NAMES[0]);",
+        "}"
+    ])
+
+
+    setup_func_body = [
+        "    static tflite::MicroErrorReporter micro_error_reporter;",
+        "    tflm::error_reporter = &micro_error_reporter;",
+        "",
+        "    tflm::model = tflite::GetModel(g_model);",
+        "    if (tflm::model->version() != TFLITE_SCHEMA_VERSION) {",
+        "        TF_LITE_REPORT_ERROR(tflm::error_reporter, \"Model version mismatch!\");",
+        "        return;",
+        "    }",
+        "",
+        "    static tflite::AllOpsResolver resolver;",
+        "    static tflite::MicroInterpreter static_interpreter(tflm::model, resolver, tflm::tensor_arena, tflm::kTensorArenaSize, tflm::error_reporter);",
+        "    tflm::interpreter = &static_interpreter;",
+        "",
+        "    if (tflm::interpreter->AllocateTensors() != kTfLiteOk) {",
+        "        TF_LITE_REPORT_ERROR(tflm::error_reporter, \"AllocateTensors() failed.\");",
+        "        return;",
+        "    }",
+        "",
+        "    tflm::input = tflm::interpreter->input(0);",
+        "    tflm::output = tflm::interpreter->output(0);",
+        "    logEvent(\"AI: TFLM Initialized\");",
+    ]
+
+    code_parts['setup_func'] = generate_full_cpp_function("setup_tflm", setup_func_body)
+
+    return code_parts
+
+def generate_interpreter_function(graph, blueprint):
+    """
+    (AI Tool, Hardened) Forges the C++ function that runs AI inference and
+    interprets the results using strongly-typed enum classes.
+    """
+    print(" -> Forging the Oracle's Mouthpiece (Enum Class Hardened)...")
+    num_features = len(graph['sensors_ordered']) + len(graph['balance_nodes'])
+    
+    body = [
+        "if (!tflm::interpreter || !tflm::input) {",
+        "    statusMessage = \"AI ERROR: Not Initialized\";",
+        # <<<--- SURGICAL REPAIR ---<<<
+        "    currentHealth = SystemHealth::FAULTED;",
+        "    return;",
+        "}",
+        "",
+        "// 1. Load live data from the Digital Twin into the model's input tensor",
+        f"if (tflm::input->dims->size != 2 || tflm::input->dims->data[1] != {num_features}) {{",
+        "    logEvent(\"AI_ERR: Input shape mismatch\");",
+        "    return;",
+        "}",
+        "",
+        "int feature_idx = 0;",
+        "for(const auto& s : Pipeline::SENSORS) {",
+        "    tflm::input->data.f[feature_idx++] = s.filtered_rate_lps;",
+        "}",
+        "for(const auto& n : Pipeline::NODES) {",
+        "    float balance = 0.0f;",
+        "    for(int i : n.inflow_sensor_indices) balance += Pipeline::SENSORS[i].filtered_rate_lps;",
+        "    for(int i : n.outflow_sensor_indices) balance -= Pipeline::SENSORS[i].filtered_rate_lps;",
+        "    tflm::input->data.f[feature_idx++] = balance;",
+        "}",
+        "",
+        "// 2. Run inference by invoking the TFLM interpreter",
+        "if (tflm::interpreter->Invoke() != kTfLiteOk) {",
+        "    logEvent(\"AI_ERR: Invoke Failed\");",
+        "    return;",
+        "}",
+        "",
+        "// 3. Find the highest probability from the output tensor",
+        "float max_prob = -1.0f;",
+        "int max_idx = -1;",
+        "for (int i = 0; i < tflm::CLASS_COUNT; ++i) {",
+        "    if (tflm::output->data.f[i] > max_prob) {",
+        "        max_prob = tflm::output->data.f[i];",
+        "        max_idx = i;",
+        "    }",
+        "}",
+        "",
+        "// 4. Translate the result into a human-readable diagnosis",
+        "if (max_idx != -1) {",
+        "    String diagnosis = tflm::CLASS_NAMES[max_idx];",
+        "    statusMessage = \"AI: \" + diagnosis + \" (\" + String(int(max_prob * 100)) + \"%)\";",
+        "    logEvent(statusMessage);",
+        "",
+        "    if (diagnosis.equalsIgnoreCase(\"normal\")) {",
+        # <<<--- SURGICAL REPAIR ---<<<
+        "        currentHealth = SystemHealth::HEALTHY;",
+        "    } else {",
+        # <<<--- SURGICAL REPAIR ---<<<
+        "        currentHealth = SystemHealth::AI_DIAGNOSIS;",
+        "    }",
+        "} else {",
+        "    statusMessage = \"AI: Interpretation Error\";",
+        "}"
+    ]
+    return generate_full_cpp_function("runInferenceAndInterpret", body)
+
+
+
+### 4.E: Main `setup()` and `loop()` Entry Point Forges
+# ------------------------------------------------------------------------------
+def generate_setup(graph, blueprint):
+    """
+    (Surgical Tool, AI-Aware & Purified) Forges the C++ setup() function, now
+    generating C++ compliant strings with correctly escaped newlines.
+    """
+    print(" -> Forging Setup Function (Purified AI-Aware Edition)...")
+    
+    ai_enabled = blueprint.get('ai_model', {}).get('enabled', False)
+
+    body_lines = [
+        "Serial.begin(115200); while(!Serial);",
+        # THE FIX: This f-string is now confirmed to generate a valid single-line C++ string.
+        f'Serial.println("\\n\\nBooting IPP v5.0 (AI: {"ENABLED" if ai_enabled else "DISABLED"})");',
+        "logEvent(\"Boot\");",
+        "",
+        "// --- Initialize Filesystem & Failsafe Button ---",
+        "pinMode(0, INPUT_PULLUP);",
+        "if (!SPIFFS.begin(true)) {",
+        "    Serial.println(\"FATAL: SPIFFS Mount Failed!\");",
+        "    while(true) delay(1000);",
+        "}",
+        "",
+        "// --- WiFi Connection Protocol ---",
+        "WiFi.mode(WIFI_STA);",
+        "WiFi.disconnect(true);",
+        "delay(100);",
+        "String saved_ssid, saved_pass;",
+        "if (loadNetworkConfig(saved_ssid, saved_pass)) {",
+        "    WiFi.begin(saved_ssid.c_str(), saved_pass.c_str());",
+        "    Serial.print(\"Connecting to '\" + saved_ssid + \"'...\");",
+        "    int connect_tries = 0;",
+        "    while (WiFi.status() != WL_CONNECTED && connect_tries < 20) {",
+        "        Serial.print(\".\");",
+        "        delay(500);",
+        "        connect_tries++;",
+        "    }",
+        "}",
+        "",
+        "// --- Check Connection & Start AP Mode if Needed ---",
+        "if (WiFi.status() != WL_CONNECTED) {",
+        # THE FIX: String is now a single line with '\\n' for the newline.
+        "    Serial.println(\"\\nConnection Failed. Starting AP for configuration.\");",
+        "    logEvent(\"NetFAIL: Starting AP\");",
+        "    WiFi.mode(WIFI_AP);",
+        "    WiFi.softAP(\"IntelliPipe_Setup\");",
+        "} else {",
+        # THE FIX: String is now a single line with '\\n' for the newline.
+        "    Serial.println(\"\\nSUCCESS!\");",
+        "    logEvent(\"NetOK: \" + WiFi.localIP().toString());",
+        "}",
+        "Serial.println(\"IP: \" + (WiFi.getMode() == WIFI_AP ? WiFi.softAPIP().toString() : WiFi.localIP().toString()));",
+        "",
+        "// --- Universal System Initializations ---",
+        "initializeTuningProfiles();",
+        "Pipeline::initializeGraph();",
+        "",
+        "// --- AI System Initialization (if enabled in blueprint) ---",
+        "if (true == " + ("true" if ai_enabled else "false") + ") {",
+        "    setup_tflm();",
+        "}",
+        "",
+        "// --- Load Saved State (if connected) ---",
+        "if (WiFi.getMode() == WIFI_STA) {",
+        "   if (!loadCalibrationData()) {",
+        "       resetCalibrationAndFaults(); // If no calibration exists, start one.",
+        "   }",
+        "}",
+        "",
+        "// --- Attach Sensor Interrupts ---",
+        generate_master_isr_array(graph),
+        "for(size_t i = 0; i < Pipeline::SENSORS.size(); ++i) {",
+        "    pinMode(Pipeline::SENSORS[i].pin, INPUT_PULLUP);",
+        "    attachInterrupt(digitalPinToInterrupt(Pipeline::SENSORS[i].pin), ISR_S_FN[i], RISING);",
+        "}",
+        "",
+        "// --- Start The Web Server and Define All Handlers ---",
+        "server.on(\"/\", HTTP_GET, handleRoot);",
+        "server.onNotFound(handleNotFound);",
+        "server.on(\"/data\", HTTP_GET, handleData);",
+        "server.on(\"/set_tuning\", HTTP_POST, handleTuningSwitch);",
+        "server.on(\"/save_network\", HTTP_POST, handleSaveNetwork);",
+        "server.on(\"/recalibrate\", HTTP_POST, [](){",
+        "    if (WiFi.getMode() == WIFI_STA) {",
+        "        SPIFFS.remove(\"/calibration.json\");",
+        "        logEvent(\"Web Recalibration Request\");",
+        "        resetCalibrationAndFaults();",
+        "        server.send(200, \"text/plain\", \"OK: Recalibration started.\");",
+        "    } else {",
+        "        server.send(403, \"text/plain\", \"Action not available in AP Mode.\");",
+        "    }",
+        "});",
+        "server.begin();",
+        "logEvent(\"Web Server Online\");",
+        "",
+        "lastUpdateTime = millis();",
+        "Serial.println(\"---- Setup Complete. System is now live. ----\");",
+    ]
+    return generate_full_cpp_function("setup", body_lines)
+
+def generate_loop(graph, blueprint):
+    """
+    (Surgical Tool, AI-Aware & Hardened) Generates the main C++ loop().
+    This version's state machine is fully compliant with the strongly-typed 'enum class' syntax.
+    """
+    print(" -> Forging the Main Loop (Enum Class Hardened)...")
+    
+    ai_enabled = blueprint.get('ai_model', {}).get('enabled', False)
+
+    body_lines = [
+        "server.handleClient();",
+        "",
+        "// In AP Mode, the device is waiting for configuration and should not run the main loop.",
+        "if (WiFi.getMode() == WIFI_AP) {",
+        "    return;",
+        "}",
+        "",
+        "// Hardware Failsafe: Long-press BOOT button for a factory reset.",
+        "static unsigned long btn_press_time = 0;",
+        "static bool btn_was_pressed = false;",
+        "if (digitalRead(0) == LOW) {",
+        "    if (!btn_was_pressed) {",
+        "        btn_press_time = millis();",
+        "        btn_was_pressed = true;",
+        "    }",
+        "} else {",
+        "    if (btn_was_pressed) {",
+        "        if (millis() - btn_press_time > 5000) {",
+        "            logEvent(\"BTN: Full Factory Reset\");",
+        "            SPIFFS.remove(\"/calibration.json\");",
+        "            SPIFFS.remove(\"/network.json\");",
+        "            ESP.restart();",
+        "        }",
+        "    }",
+        "    btn_was_pressed = false;",
+        "}",
+        "",
+        "if (millis() - lastUpdateTime < ActiveTuning.update_interval_ms) {",
+        "    return;",
+        "}",
+        "lastUpdateTime = millis();",
+        "",
+        "updateFlowRatesAndValidity();",
+        "calculateFilteredFlowRates();",
+        "",
+        "// --- Master State Machine (Hardened) ---",
+        "switch (currentSystemState) {",
+        # <<<--- START OF SURGICAL REPAIR ---<<<
+        "    case SystemState::CALIBRATING:",
+        "        handleCalibration();",
+        "        break;",
+        "",
+        "    case SystemState::OPERATING_RULES:",
+        "    case SystemState::OPERATING_DEGRADED:",
+        "        performRuleBasedDetection();",
+        "        break;",
+        "",
+        "    case SystemState::AI_ACTIVE:",
+        f'        {"runInferenceAndInterpret();" if ai_enabled else "performRuleBasedDetection(); // AI disabled, using rules"}',
+        "        break;",
+        "",
+        "    case SystemState::SENSOR_FAULT:",
+        "        currentHealth = SystemHealth::FAULTED;",
+        "        // statusMessage is set by updateFlowRatesAndValidity()",
+        "        break;",
+        "",
+        "    case SystemState::FAILED_CALIBRATION:",
+        "        statusMessage = \"Calibration FAILED\";",
+        "        currentHealth = SystemHealth::WARNING;",
+        "        break;",
+        "",
+        "    case SystemState::BOOTING:",
+        "        // Do nothing in the loop while booting, setup handles all.",
+        "        break;",
+        # <<<--- END OF SURGICAL REPAIR ---<<<
+        "}",
+    ]
+    return generate_full_cpp_function("loop", body_lines)
+
+# ==============================================================================
+# SECTION 5: THE MASTER ORCHESTRATOR (GRAND ASSEMBLER)
+# ==============================================================================
+
+def run_master_orchestrator(blueprint, template):
+    """
+    (Grand Assembler v12.3) Hardens C++ generation by using modern 'enum class'
+    to provide strong type safety and resolve all compiler ambiguity errors.
+    """
+    print("\n[1/3] Analyzing Blueprint...")
+    graph = build_system_graph(blueprint)
+    ai_enabled = blueprint.get('ai_model', {}).get('enabled', False)
+
+    print(f"[2/3] Forging C++ components in dependency-aware order (AI: {ai_enabled})")
+    master_code = []
+
+    # === STAGE 1: Data Structures and Globals (Must be declared first) ===
+    master_code.append("// === SECTION A: GLOBALS, DATA STRUCTURES, & NAMESPACES ===")
+    master_code.append(generate_tuning_system(blueprint))
+    if ai_enabled:
+        master_code.append(generate_tflm_setup_and_globals(graph, blueprint)['globals'])
+    master_code.append(generate_digital_twin_namespace(graph, blueprint))
+    
+    # <<<--- DEFINITIVE SURGERY: HARDENING ENUMS ---<<<
+    # Change from 'enum' to strongly-typed 'enum class' to resolve compiler errors.
+    master_code.extend([
+        "WebServer server(80);",
+        "enum class SystemHealth { HEALTHY, WARNING, FAULTED, AI_DIAGNOSIS };",
+        "enum class SystemState { BOOTING, CALIBRATING, OPERATING_RULES, OPERATING_DEGRADED, FAILED_CALIBRATION, SENSOR_FAULT, AI_ACTIVE };",
+        "SystemState currentSystemState = SystemState::BOOTING; SystemHealth currentHealth = SystemHealth::HEALTHY;",
+        "unsigned long lastUpdateTime = 0; String statusMessage = \"Booting...\"; bool calibrationComplete = false;",
+        "int calibrationSamplesCollected = 0, calibFlowConfirmCycles = 0, invalidSamplesDuringCalibration = 0;",
+        "std::deque<String> eventLog;"
+    ])
+    # --- END OF SURGERY ---
+
+    # === STAGE 2: ALL Logic and Helper Functions (The complete implementation body) ===
+    # This entire stage remains identical to the v12.2 version. The code is sound.
+    master_code.append("\n// === SECTION B: HELPER & LOGIC FUNCTIONS ===")
+
+    def _format_cpp_value(v):
+        if isinstance(v, bool): return "true" if v else "false"
+        if isinstance(v, str): escaped_str = v.replace('"', '\\"'); return f'"{escaped_str}"'
+        if isinstance(v, float): return f'{v:.4f}f'
+        if isinstance(v, int): return str(v)
+        return str(v)
+
+    init_profiles_body = ["AllProfiles.clear();"]
+    profiles = blueprint.get('system_tuning_parameters',{}).get('profiles',[])
+    for p in profiles:
+        vals = [_format_cpp_value(v) for v in p.values()]
+        init_profiles_body.append(f"    AllProfiles.push_back({{{', '.join(vals)}}});")
+    init_profiles_body.append(f'setTuningProfile("{blueprint.get("system_tuning_parameters",{}).get("default_profile_id")}");')
+
+    log_event_body = [
+        "if (ActiveTuning.max_log_events <= 0) return;",
+        "String logEntry = String(millis() / 1000) + \"s: \" + eventMessage;",
+        "eventLog.push_back(logEntry);",
+        "while (eventLog.size() > (unsigned int)ActiveTuning.max_log_events) { eventLog.pop_front(); }"
+    ]
+    set_tuning_body = [
+        "for (const auto& p : AllProfiles) { if (p.id == profileId) { ActiveTuning = p; logEvent(\"Tuning: \" + p.label); return; } }",
+        "logEvent(\"WARN: Tuning profile not found: \" + profileId);"
+    ]
+    calculate_node_stats_body = [
+        "if (calibrationSamplesCollected < 2) return false;",
+        "double mean_d = node.sum_X / calibrationSamplesCollected;",
+        "double var_d = (node.sum_X2 / calibrationSamplesCollected) - (mean_d * mean_d);",
+        "if (var_d < 0.0) var_d = 0.0;",
+        "node.mean_balance_lps = (float)mean_d;", "node.std_dev_balance_lps = (float)sqrt(var_d);",
+        "return true;"
+    ]
+    median_filter_body = [
+        "s.history[s.history_index] = s.raw_rate_lps;", "s.history_index = (s.history_index + 1) % s.history.size();",
+        "std::vector<float> sorted_hist = s.history;", "std::sort(sorted_hist.begin(), sorted_hist.end());",
+        "return sorted_hist[sorted_hist.size() / 2];"
+    ]
+
+    all_funcs = [
+        generate_full_cpp_function("logEvent", log_event_body, "void", ["const String& eventMessage"]),
+        generate_full_cpp_function("setTuningProfile", set_tuning_body, "void", ["const String& profileId"]),
+        generate_full_cpp_function("initializeTuningProfiles", init_profiles_body),
+        generate_full_cpp_function("calculateNodeStatistics", calculate_node_stats_body, "bool", ["Pipeline::BalanceNode& node"]),
+        generate_full_cpp_function("applyMedianFilter", median_filter_body, "float", ["Pipeline::Sensor& s"]),
+        generate_update_flow_rates(graph, blueprint), generate_calculate_filtered_flow_rates(graph, blueprint),
+        generate_reset_calibration_and_faults(graph, blueprint), generate_calculate_statistics(graph, blueprint),
+        generate_save_calibration(graph, blueprint), generate_load_calibration(graph, blueprint),
+        generate_handle_calibration(graph, blueprint), generate_perform_rule_based_detection(graph, blueprint),
+        generate_page_shell(graph, blueprint), generate_wifi_helpers(graph, blueprint),
+        generate_data_api_handler(graph, blueprint), generate_tuning_switch_handler(graph, blueprint),
+        generate_recalibrate_handler(graph, blueprint),
+        generate_full_cpp_function("handleRoot", ['server.send(200, "text/html", generatePageShell());']),
+        generate_full_cpp_function("handleNotFound", ['server.send(404, "text/plain", "Not Found");']),
+    ]
+    if ai_enabled:
+        ai_parts = generate_tflm_setup_and_globals(graph, blueprint)
+        all_funcs.append(ai_parts['setup_func'])
+        all_funcs.append(generate_interpreter_function(graph, blueprint))
+    else:
+        all_funcs.extend([
+            generate_full_cpp_function("setup_tflm", ["/* AI DISABLED */"]),
+            generate_full_cpp_function("runInferenceAndInterpret", ["/* AI DISABLED */"])
+        ])
+
+    master_code.extend(all_funcs)
+
+    # === STAGE 3: Main Entry Points and ISRs (Must be generated last) ===
+    master_code.append("\n// === SECTION C: ISRs & MAIN ENTRY POINTS ===")
+    master_code.append(generate_isrs(graph))
+    master_code.append(generate_setup(graph, blueprint))
+    master_code.append(generate_loop(graph, blueprint))
+
+    # === FINAL ASSEMBLY ===
+    print("[3/3] Assembling final artifact...")
+    output_code = template
+    tflm_includes = ''
+    if ai_enabled:
+        tflm_includes = generate_tflm_setup_and_globals(graph, blueprint)['includes']
+        output_code = output_code.replace('// __PYTHON_INJECT_AI_MODEL_H__', inject_ai_model(graph, blueprint))
+    else:
+        output_code = output_code.replace('// __PYTHON_INJECT_AI_MODEL_H__', '')
+
+    output_code = output_code.replace('// __PYTHON_INJECT_TFLM_INCLUDES__', tflm_includes)
+    final_implementation = "\n\n".join(master_code)
+    output_code = output_code.replace('// __PYTHON_INJECT_MASTER_IMPLEMENTATION__', final_implementation)
+
+    return output_code
+
+# ==============================================================================
+# SCRIPT ENTRY POINT
+# ==============================================================================
+if __name__ == "__main__":
+    main()
+    print("\n--- Script execution finished. ---")
+    
+    
+    
+    
+def main():
+    """
+    (The Interactive Factory v1.1 - Command Chaining)
+    Parses and executes a sequence of operations.
+    """
+    print("\n--- Intelligent Pipeline Configurator v4.2 (Batch Mode) ---")
+    print("\nAvailable Operations:")
+    print("  [1] Validate Blueprint")
+    print("  [2] Forge Production Firmware (.ino)")
+    print("  [3] Launch Data Factory (Generate training_data.csv)")
+
+    choice_str = input("\nPlease select operation(s) (e.g., '1', '2', '1-2-3'): ")
+
+    # --- INPUT VALIDATION --
+    # If the user just presses Enter, the stripped string will be empty.
+    if not choice_str.strip():
+        print("\n**ERROR**: No operation selected. Halting execution.")
+        return # Exit the function gracefully.
+    
+    tasks_to_run = choice_str.strip().split('-')
+    
+    task_map = {
+        '1': validate_blueprint_task,
+        '2': forge_firmware_task,
+        '3': generate_data_task
+    }
+
+    # --- Load Blueprint (Common to all operations) ---
+    try:
+        with open("SingleBranch_Test_v4.json", 'r', encoding='utf-8') as f:
+            blueprint = json.load(f)
+    except Exception as e:
+        print(f"**FATAL ERROR**: Could not load 'SingleBranch_Test_v4.json'. {e}"); return
+
+    # --- Sequential Execution with Short-Circuiting ---
+    for task_id in tasks_to_run:
+        task_func = task_map.get(task_id)
+        if not task_func:
+            print(f"\n**ERROR**: Invalid task ID '{task_id}'. Halting execution.")
+            return
+
+        success = task_func(blueprint)
+        if not success:
+            print("\n**Execution halted due to task failure.**")
+            return
+            
+    print("\n//-- Batch processing complete. --//")

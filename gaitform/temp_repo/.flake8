@@ -1,0 +1,5 @@
+[flake8]
+max-line-length = 88
+# Intentional Exclusions:
+# E501 (Line Length): Excluded intentionally because Gaitform includes complex mathematical and matrix operations that are significantly less readable when forced to wrap at 88 characters.
+extend-ignore = E501

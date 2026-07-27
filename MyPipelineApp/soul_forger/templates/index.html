@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fluidic Blueprint Designer - Web UI</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <link rel="stylesheet" href="/static/style.css">
+
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Inline SVG Background Pattern for Fluidic Theme -->
+        <svg class="background-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid slice">
+            <defs>
+                <pattern id="fluid-pattern" x="0" y="0" width="20" height="20" patternUnits="userSpaceOnUse">
+                    <path d="M0,10 Q5,0 10,10 T20,10 V20 H0 Z" fill="rgba(0, 212, 255, 0.05)" stroke="rgba(0, 212, 255, 0.1)" stroke-width="0.5"/>
+                </pattern>
+            </defs>
+            <rect width="100%" height="100%" fill="url(#fluid-pattern)"/>
+        </svg>
+
+        <div class="editor-pane">
+            <header class="app-header">
+                <img src="/static/images/microfluidic_chip.svg" alt="Microfluidic Chip Logo" class="logo">
+                <h1>Fluidic Blueprint Designer</h1>
+                <p class="subtitle">Create, validate, and visualize your fluidic system blueprints.</p>
+                <!-- Theme Toggle Button -->
+                <button id="theme-toggle" class="theme-toggle-btn" title="Toggle Theme">
+                    <i data-lucide="sun"></i>
+                </button>
+            </header>
+
+            <div class="card validation-card fade-in">
+                <h2>Validate Existing Blueprint</h2>
+                <form action="/validate" method="post" enctype="multipart/form-data" class="validate-form">
+                    <div class="file-input-container">
+                        <input type="file" id="blueprint_file" name="blueprint_file" accept=".json" required>
+                        <label for="blueprint_file" class="button-secondary file-upload-label">
+                            <i data-lucide="upload"></i>
+                            <span id="blueprint_file_label_text">Select a Blueprint...</span>
+                        </label>
+                    </div>
+                    <button type="submit" class="button-primary">
+                        <i data-lucide="shield-check"></i>
+                        <span>Validate File</span>
+                    </button>
+                </form>
+            </div>
+
+            <div class="creation-form-container">
+                <hr class="divider">
+                <h2>Create New Blueprint</h2>
+
+                <form action="/create" method="post" id="create-form" enctype="multipart/form-data" data-flawed-ids="{{ flawed_ids_json | default('[]') }}">
+                    
+                    <div class="accordion-item">
+                        <input type="checkbox" id="accordion-load" class="accordion-toggle">
+                        <label for="accordion-load" class="accordion-header">
+                            <h3><i data-lucide="folder-down"></i> Load Existing Design (Optional)</h3>
+                            <i data-lucide="chevron-down" class="accordion-icon"></i>
+                        </label>
+                        <div class="accordion-content">
+                             <div class="form-section">
+                                <div class="file-input-container">
+                                    <input type="file" id="load_blueprint_file" accept=".json">
+                                    <label for="load_blueprint_file" class="button-secondary file-upload-label">
+                                        <i data-lucide="folder-down"></i>
+                                        <span id="load_blueprint_file_label_text">Load from Blueprint...</span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion-item">
+                        <input type="checkbox" id="accordion-project" class="accordion-toggle" checked>
+                        <label for="accordion-project" class="accordion-header">
+                            <h3><i data-lucide="file-text"></i> Project Details</h3>
+                            <i data-lucide="chevron-down" class="accordion-icon"></i>
+                        </label>
+                        <div class="accordion-content">
+                            <div class="form-section">
+                                <label for="project_name">Project Name:</label>
+                                <input type="text" id="project_name" name="project_name" required>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion-item">
+                        <input type="checkbox" id="accordion-network" class="accordion-toggle">
+                        <label for="accordion-network" class="accordion-header">
+                            <h3><i data-lucide="wifi"></i> Network Configuration</h3>
+                            <i data-lucide="chevron-down" class="accordion-icon"></i>
+                        </label>
+                        <div class="accordion-content">
+                            <div class="form-section">
+                                <label for="network_ssid">WiFi SSID:</label>
+                                <input type="text" id="network_ssid" name="network_ssid">
+                                <label for="network_password">WiFi Password:</label>
+                                <input type="password" id="network_password" name="network_password">
+                                <label for="telemetry_endpoint">Telemetry Endpoint URL:</label>
+                                <input type="text" id="telemetry_endpoint" name="telemetry_endpoint" placeholder="e.g., http://myserver.com/api/data">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion-item">
+                        <input type="checkbox" id="accordion-hardware" class="accordion-toggle" checked>
+                        <label for="accordion-hardware" class="accordion-header">
+                            <h3><i data-lucide="cpu"></i> Hardware Pin Configuration</h3>
+                            <i data-lucide="chevron-down" class="accordion-icon"></i>
+                        </label>
+                        <div class="accordion-content">
+                            <div class="form-section">
+                                <label for="available_pins_input">Available ESP32 GPIO Pins (comma separated)</label>
+                                <input type="text" id="available_pins_input" name="available_pins" value="5, 18, 19, 21, 22, 23, 25, 26" placeholder="e.g., 5, 18, 19, 21">
+                                <p class="form-helper">Pins you list here are used for automatic assignments. Leave blank to keep the default set.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion-item">
+                        <input type="checkbox" id="accordion-ai" class="accordion-toggle">
+                        <label for="accordion-ai" class="accordion-header">
+                            <h3><i data-lucide="brain-circuit"></i> AI Model Configuration</h3>
+                            <i data-lucide="chevron-down" class="accordion-icon"></i>
+                        </label>
+                        <div class="accordion-content">
+                            <div class="form-section">
+                                <div class="toggle-switch-wrapper">
+                                    <label for="ai_model_enabled" class="toggle-label">AI Enabled</label>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="ai_model_enabled" name="ai_model_enabled" value="true">
+                                        <span class="slider"></span>
+                                    </label>
+                                </div>
+                                <label for="ai_model_filename">Model File (.h):</label>
+                                <input type="text" id="ai_model_filename" name="ai_model_filename" placeholder="e.g., model.h">
+                                
+                                <div class="file-input-container">
+                                    <input type="file" id="labels_file" name="labels_file" accept=".json">
+                                    <label for="labels_file" class="button-secondary file-upload-label">
+                                        <i data-lucide="list-checks"></i>
+                                        <span id="labels_file_label_text">Select Labels File...</span>
+                                    </label>
+                                </div>
+
+
+                                <h4>Prescriptive Actions</h4>
+                                <div id="actions-container"></div>
+                                <button type="button" id="add-action-btn" class="button-secondary add-btn">
+                                    <i data-lucide="plus"></i><span>Add Action</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion-item">
+                        <input type="checkbox" id="accordion-nodes" class="accordion-toggle" checked>
+                        <label for="accordion-nodes" class="accordion-header">
+                            <h3><i data-lucide="circle-dot"></i> Nodes</h3>
+                            <i data-lucide="chevron-down" class="accordion-icon"></i>
+                        </label>
+                        <div class="accordion-content">
+                            <div class="form-section">
+                                <div id="nodes-container"></div>
+                                <button type="button" id="add-node-btn" class="button-secondary add-btn">
+                                    <i data-lucide="plus"></i><span>Add Node</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion-item">
+                        <input type="checkbox" id="accordion-pipes" class="accordion-toggle" checked>
+                        <label for="accordion-pipes" class="accordion-header">
+                            <h3><i data-lucide="grip-lines-vertical"></i> Pipes</h3>
+                            <i data-lucide="chevron-down" class="accordion-icon"></i>
+                        </label>
+                        <div class="accordion-content">
+                            <div class="form-section">
+                                <div id="pipes-container"></div>
+                                <button type="button" id="add-pipe-btn" class="button-secondary add-btn">
+                                    <i data-lucide="plus"></i><span>Add Pipe</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <hr class="divider">
+                    <button type="submit" class="button-primary submit-btn">
+                        <i data-lucide="save"></i>
+                        <span>Create and Save Blueprint</span>
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <div class="visualizer-pane">
+            <div class="card visualizer-card fade-in">
+                <h2>Live System Visualizer</h2>
+                <div id="network-canvas"></div>
+                
+                {% if result_message %}
+                <div class="result-box {{ result_class }}">
+                    <strong>{{ result_message }}</strong>
+                    {% if error_details %}
+                    <ul>
+                        {% for detail in error_details %}
+                        <li>{{ detail }}</li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %}
+                    {% if optimization_report %}
+                    <pre>{{ optimization_report | join('\n') }}</pre>
+                    {% endif %}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+    <script>
+      lucide.createIcons();
+
+      // Theme Toggle Functionality
+      const themeToggle = document.getElementById('theme-toggle');
+      const html = document.documentElement;
+      const icon = themeToggle.querySelector('i');
+
+      themeToggle.addEventListener('click', () => {
+        const currentTheme = html.getAttribute('data-theme');
+        const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+        html.setAttribute('data-theme', newTheme);
+        icon.setAttribute('data-lucide', newTheme === 'dark' ? 'sun' : 'moon');
+        lucide.createIcons(); // Re-render icons
+      });
+    </script>
+</body>
+</html>

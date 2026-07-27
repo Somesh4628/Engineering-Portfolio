@@ -1,0 +1,67 @@
+{
+  "project_name": "MyFirstPipelineProject",
+  "esp32_target_mode": "REAL_SENSORS",
+  "tflm_options": {
+    "enable_tflm": 0
+  },
+  "network_credentials": {
+    "ssid": "YOUR_WIFI_SSID",
+    "password": "YOUR_WIFI_PASSWORD"
+  },
+  "pipeline_properties": {
+    "total_length_m": 1.0,
+    "inner_diameter_m": 0.0065,
+    "pipe_roughness_m": 0.0000020,
+    "update_interval_ms": 1000
+  },
+  "main_sensors_config": {
+    "number_of_sensors": 2,
+    "use_global_k_factor": true,
+    "global_k_factor_pulses_per_liter": 460.0,
+    "sensors": [
+      {
+        "id_ui_hint": "Sensor_Inlet_S1",
+        "gpio_pin": 4
+      },
+      {
+        "id_ui_hint": "Sensor_Outlet_S2",
+        "gpio_pin": 17
+      }
+    ]
+  },
+  "minor_loss_coefficients": {
+    "k_90_elbow": 0.9,
+    "k_45_elbow": 0.4,
+    "k_tee_branch": 1.8,
+    "k_tee_straight": 0.6,
+    "num_90_elbows": 0,
+    "num_45_elbows": 0,
+    "num_tee_branches": 0,
+    "num_tee_straight": 0
+  },
+  "system_tuning_parameters": {
+    "ema_alpha": 0.35,
+    "calibration_sample_count": 12,
+    "deviation_std_dev_factor": 1.2,
+    "calibration_min_start_flow_lps": 0.090,
+    "near_zero_flow_lps": 0.040,
+    "max_invalid_samples_during_calib_ratio": 0.25,
+    "calib_start_confirm_cycles": 2,
+    "hysteresis_factor": 0.75,
+    "leak_confirmation_cycles_default": 2,
+    "adaptive_confirm_cycles_fast": 1,
+    "adaptive_confirm_factor_high": 2.5,
+    "drift_confirmation_cycles": 6,
+    "burst_roc_threshold_lps_sec": 0.06,
+    "general_roc_warn_threshold_lps_sec": 0.12,
+    "baseline_drift_factor": 3.5,
+    "near_zero_diff_lps_ratio_to_near_zero_flow": 0.15,
+    "max_realistic_flow_lps": 18.0,
+    "max_consecutive_faults": 8,
+    "stuck_sensor_cycles": 8,
+    "validity_max_raw_roc_lps": 12.0,
+    "debug_validity_level": 0,
+    "min_total_pos_delta_for_location_estimate_ratio_to_near_zero_flow": 0.12,
+    "max_log_events": 10
+  }
+}

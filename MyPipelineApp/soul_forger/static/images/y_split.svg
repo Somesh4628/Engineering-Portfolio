@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="pipe-gradient" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#E0E0E0"/><stop offset="50%" stop-color="#C0C0BE"/><stop offset="100%" stop-color="#8B8B8A"/>
+    </linearGradient>
+  </defs>
+  <path d="M50 90 V50 L75 25" stroke="url(#pipe-gradient)" stroke-width="16" stroke-linecap="round"/>
+  <path d="M50 50 L25 25" stroke="url(#pipe-gradient)" stroke-width="16" stroke-linecap="round"/>
+</svg>

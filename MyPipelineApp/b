@@ -1,0 +1,15 @@
+.\run_server.bat
+
+uvicorn conductor_server:app --reload
+
+http://127.0.0.1:8000/docs
+
+git commit -m "MILESTONE: Aegis - Stable Firmware Factory" -m "This is the first stable checkpoint of the MyPipelineApp ecosystem. The config_tool.py script has been fully refactored to produce error-free firmware for the ESPAsyncWebServer library. This version serves as the stable foundation for Campaign 1: The Professional Engineer."
+
+PS D:\vs code\MyPipelineApp> git log
+commit a32305bfbc048d41d7f51e8f5cd520fef758dab4 (HEAD -> master)
+Author: Somesh4628 <someshsuryawanshi4628@gmail.com>
+Date:   Mon Sep 1 23:59:33 2025 +0530
+MILESTONE: Aegis - Stable Firmware Factory
+
+    This is the first stable checkpoint of the MyPipelineApp ecosystem. The config_tool.py script has been fully refactored to produce error-free firmware for the ESPAsyncWebServer library. This version serves as the stable foundation for Campaign 1: The Professional Engineer

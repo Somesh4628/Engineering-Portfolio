@@ -1,0 +1,145 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Soul Blueprint",
+  "description": "A comprehensive blueprint for an intelligent fluidic system.",
+  "type": "object",
+  "required": [
+    "project_details",
+    "ai_model",
+    "nodes",
+    "pipes",
+    "system_tuning_parameters"
+  ],
+  "properties": {
+    "project_details": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "The unique name of the system design." },
+        "description": { "type": "string" },
+        "version": { "type": "string", "description": "Version of the system blueprint." }
+      },
+      "required": ["name", "version"]
+    },
+    "ai_model": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "model_file": { "type": "string", "pattern": "^.*\\.h$" },
+        "output_classes": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["enabled", "model_file", "output_classes"]
+    },
+    "network_info": {
+      "type": "object",
+      "properties": {
+        "ssid": { "type": "string" },
+        "password": { "type": "string" }
+      },
+      "required": ["ssid", "password"]
+    },
+        "nodes": {
+      "type": "array",
+      "description": "The list of all components (nodes) in the system.",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "description": "The unique identifier for this component."
+          },
+          "node_role": {
+            "type": "string",
+            "description": "The primary role of this node in the network (e.g., an entry point, an exit point, or an internal junction).",
+            "enum": ["inlet", "junction", "outlet"]
+          },
+          "component_type": {
+            "type": "string",
+            "description": "The specific physical component being used.",
+            "enum": [
+              "Default", "Tee-Junction", "Wye-Split", "Cross-Junction",
+              "90-Degree-Elbow", "45-Degree-Elbow", "U-Bend",
+              "Straight-Coupling", "Ball-Valve", "Gate-Valve", "Tap"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "description": "A user-friendly label for this component."
+          },
+          "orientation": {
+            "type": "integer",
+            "description": "Rotation of the component in degrees, typically in 90-degree increments.",
+            "enum": [0, 90, 180, 270],
+            "default": 0
+          }
+        },
+        "required": ["node_id", "node_role", "component_type", "label"]
+      }
+    },
+
+    
+    "pipes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "pipe_id": { "type": "string" },
+          "source_node": { "type": "string" },
+          "target_node": { "type": "string" },
+          "flow_sensor": {
+            "type": "object",
+            "properties": {
+              "sensor_id": { "type": "string" },
+              "label": { "type": "string" },
+              "gpio_pin": { "type": "integer", "minimum": 0 },
+              "k_factor_ppl": { "type": "number", "exclusiveMinimum": 0 }
+            },
+            "required": ["sensor_id", "label", "gpio_pin", "k_factor_ppl"]
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "length_m": { "type": "number", "exclusiveMinimum": 0 },
+              "inner_diameter_m": { "type": "number", "exclusiveMinimum": 0 }
+            },
+            "required": ["length_m", "inner_diameter_m"]
+          }
+        },
+        "required": ["pipe_id", "source_node", "target_node", "flow_sensor", "properties"]
+      }
+    },
+    "system_tuning_parameters": {
+      "type": "object",
+      "properties": {
+        "default_profile_id": { "type": "string" },
+        "profiles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "label": { "type": "string" },
+              "update_interval_ms": { "type": "integer" },
+              "median_window_size": { "type": "integer" },
+              "ema_alpha": { "type": "number" },
+              "calibration_sample_count": { "type": "integer" },
+              "deviation_std_dev_factor": { "type": "number" },
+              "calibration_min_start_flow_lps": { "type": "number" },
+              "calib_start_confirm_cycles": { "type": "integer" },
+              "leak_confirmation_cycles": { "type": "integer" },
+              "drift_confirmation_cycles": { "type": "integer" },
+              "max_consecutive_faults": { "type": "integer" },
+              "near_zero_flow_lps": { "type": "number" },
+              "max_realistic_flow_lps": { "type": "number" },
+              "stuck_sensor_cycles": { "type": "integer" },
+              "max_log_events": { "type": "integer" },
+              "debug_validity_level": { "type": "integer" }
+            },
+            "required": ["id", "label", "update_interval_ms"]
+          }
+        }
+      },
+      "required": ["default_profile_id", "profiles"]
+    }
+  }
+}

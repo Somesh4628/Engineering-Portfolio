@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="pipe-gradient" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#E0E0E0"/>
+      <stop offset="50%" stop-color="#AEAEAB"/>
+      <stop offset="100%" stop-color="#8B8B8A"/>
+    </linearGradient>
+    <linearGradient id="flange-gradient" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#C0C0BE"/>
+      <stop offset="100%" stop-color="#A0A09E"/>
+    </linearGradient>
+  </defs>
+  <!-- Horizontal Pipe -->
+  <path d="M10 42 h80 v16 h-80 z" fill="url(#pipe-gradient)"/>
+  <path d="M10 40 h4 v20 h-4 z" fill="url(#flange-gradient)"/>
+  <path d="M90 40 h4 v20 h-4 z" fill="url(#flange-gradient)"/>
+  <!-- Vertical Pipe (Top only) -->
+  <path d="M42 10 v40 h16 v-40 z" fill="url(#pipe-gradient)"/>
+  <path d="M40 10 v4 h20 v-4 z" fill="url(#flange-gradient)"/>
+</svg>

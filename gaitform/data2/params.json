@@ -1,0 +1,24 @@
+{
+  "orthotic_parameters": {
+    "arch_height_mm": 15.66,
+    "heel_cup_depth_mm": 10.0,
+    "medial_post_deg": 0.66,
+    "lateral_post_deg": 0.0,
+    "met_pad_position_mm": 169.0,
+    "rigidity_zones": [
+      {
+        "zone": "heel",
+        "target": "firm"
+      },
+      {
+        "zone": "midfoot",
+        "target": "medium"
+      },
+      {
+        "zone": "forefoot",
+        "target": "soft"
+      }
+    ],
+    "flags_for_review": []
+  }
+}

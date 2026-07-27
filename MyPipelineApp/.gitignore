@@ -1,0 +1,31 @@
+# Python Virtual Environment and Cache
+/.venv
+__pycache__/
+*.pyc
+
+# PlatformIO Build & Environment Files
+/platform/.pio/
+/platform/.vscode/
+
+# VSCode Workspace Files
+.vscode/
+*.code-workspace
+
+# Generated Artifacts (from your scripts)
+MANUAL_FORGE_OUTPUT.ino
+MANUAL_TRAINING_DATA.csv
+model.h
+
+# Temporary Work & Uploads
+/temp_work/
+/uploads/
+
+# AI Model Data (Keep source, ignore large generated files if needed)
+# Keep .h5 and .tflite if they are your source models.
+# Keep training_data_engineered.csv if it's a source file.
+
+# Ignore test blueprints, but keep the core schema
+soul_forger/*.json
+"Soul Forger/*.json"
+!soul_forger/soul.schema.json
+!"Soul Forger/soul.schema.json"

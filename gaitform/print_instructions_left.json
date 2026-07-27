@@ -1,0 +1,20 @@
+{
+  "print_settings": {
+    "infill_pattern": "gyroid",
+    "base_material": "TPU_95A"
+  },
+  "zones": [
+    {
+      "zone": "heel",
+      "target": "firm"
+    },
+    {
+      "zone": "midfoot",
+      "target": "medium"
+    },
+    {
+      "zone": "forefoot",
+      "target": "firm"
+    }
+  ]
+}
