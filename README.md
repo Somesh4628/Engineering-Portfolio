@@ -1,6 +1,7 @@
-# Engineering R&D Portfolio 🚀
+# Engineering Portfolio 🚀
 ### *Advanced Systems, Biomechanical CAD, & Embedded Edge Infrastructure*
 
+[![Resume](https://img.shields.io/badge/%F0%9F%93%84%20Resume-Download%20PDF-brightgreen?style=for-the-badge)](resume.pdf)
 [![GitHub Stars](https://img.shields.io/github/stars/Somesh4628/Engineering-Portfolio?style=for-the-badge&logo=github&color=gold)](https://github.com/Somesh4628/Engineering-Portfolio)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
 [![C++](https://img.shields.io/badge/C%2B%2B-17-00599C?style=for-the-badge&logo=cplusplus&logoColor=white)](https://isocpp.org/)
@@ -9,6 +10,12 @@
 [![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](LICENSE)
 
 Welcome to my personal engineering portfolio repository. This showcase features two publication-grade R&D software projects spanning **3D Parametric CAD Automation** and **Edge-Computing Industrial IoT (IIoT)** monitoring.
+
+---
+
+## 📄 Resume Access
+
+* 📄 **Download PDF Resume**: [`resume.pdf`](resume.pdf)
 
 ---
 
@@ -41,8 +48,10 @@ Welcome to my personal engineering portfolio repository. This showcase features 
 
 ```
 Engineering-Portfolio/
-├── gaitform/               # 🦶 Automated 3D Biomechanical CAD Pipeline
-└── MyPipelineApp/          # 🌊 IntelliPipe Edge IIoT Monitoring & Firmware Factory
+├── README.md                           # 🚀 Main Portfolio Showcase
+├── resume.pdf                          # 📄 Candidate Resume PDF
+├── gaitform/                           # 🦶 Automated 3D Biomechanical CAD Pipeline
+└── MyPipelineApp/                      # 🌊 IntelliPipe Edge IIoT Monitoring & Firmware Factory
 ```
 
 ---
@@ -62,7 +71,7 @@ streamlit run app.py
 # Navigate to IntelliPipe
 cd ../MyPipelineApp
 pip install -r requirements.txt
-python config_tool.py forge --directive directive.json
+python factory/config_tool.py forge --directive directive.json
 ```
 
 ---
