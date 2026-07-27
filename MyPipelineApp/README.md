@@ -51,9 +51,25 @@ flowchart TD
 
 ---
 
+## 📁 Repository Asset Structure
+
+```
+MyPipelineApp/
+├── factory/
+│   ├── config_tool.py             # Automated Python firmware builder & CLI orchestrator
+│   └── conductor_server.py        # Web backend for firmware compilation tasks
+└── firmware/
+    └── MANUAL_FORGE_OUTPUT.ino    # Sample compiled C++ microcontroller firmware
+```
+
+* ⚙️ **Automated Firmware Factory**: [`factory/config_tool.py`](factory/config_tool.py)
+* ⚡ **Sample ESP32 C++ Firmware**: [`firmware/MANUAL_FORGE_OUTPUT.ino`](firmware/MANUAL_FORGE_OUTPUT.ino)
+
+---
+
 ## 🏭 Automated Firmware Factory Workflow
 
-The host orchestrator engine (`config_tool.py` / `conductor_server.py`) generates, configures, and compiles tailored microcontroller firmware for specific hardware node profiles.
+The host orchestrator engine (`factory/config_tool.py`) generates, configures, and compiles tailored microcontroller firmware for specific hardware node profiles.
 
 ```
        +---------------------------------------------+
@@ -129,7 +145,7 @@ python -m venv venv
 pip install -r requirements.txt
 
 # Run Python Firmware Factory CLI to compile firmware
-python config_tool.py forge \
+python factory/config_tool.py forge \
   --directive directive.json \
   --output-format platformio \
   --target esp32dev

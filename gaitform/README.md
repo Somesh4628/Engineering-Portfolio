@@ -13,6 +13,14 @@
 
 ---
 
+## 📸 Visual Showcase & 3D Render
+
+| 2D Spatial Pressure Heatmap | Procedurally Generated 3D Mesh |
+| :---: | :---: |
+| ![Pressure Heatmap](assets/pressure_heatmap.png) | ![3D Orthotic Render](assets/output_render.png) |
+
+---
+
 ## 📌 Executive Summary
 
 **Gaitform** is an automated biomechanical CAD generation pipeline that bridges spatial plantar pressure diagnostics with direct additive manufacturing. The system ingests raw **1,260-node spatial plantar pressure matrices** (derived from clinical sensor arrays or vision-based pressure estimation), performs spatial matrix interpolation, maps pressure concentrations to structural deformities, and procedurally generates custom, watertight **3D-printable orthotic shells** (STL/OBJ).
@@ -25,7 +33,7 @@ Engineered to strict clinical manufacturing criteria, Gaitform maintains a **dim
 
 ```mermaid
 flowchart TD
-    A[Raw 1,260-Node Pressure Data] --> B[Data Ingestion & Matrix Parser]
+    A[Raw 1,260-Node Pressure CSV Data] --> B[Data Ingestion & Matrix Parser]
     B --> C[OpenCV Spatial Matrix Reconstruction]
     C --> D[2D Grid Interpolation]
     D --> E[Biomechanical Parameter Mapping]
@@ -35,6 +43,25 @@ flowchart TD
     H --> I[Streamlit Interactive Dashboard]
     H --> J[Production-Ready STL Export]
 ```
+
+---
+
+## 📁 Repository Asset Structure
+
+```
+gaitform/
+├── assets/
+│   ├── output_render.png             # Rendered 3D orthotic shell preview
+│   ├── pressure_heatmap.png          # 2D interpolated spatial pressure map
+│   └── shape_comparison.png          # Topological biomechanical comparison
+├── data/
+│   └── sample_pressure_data.csv      # Sample 1,260-node spatial pressure input
+└── outputs/
+    └── sample_orthotic_shell.stl     # Production-ready 3D printable STL model
+```
+
+* 📄 **Sample Input CSV**: [`data/sample_pressure_data.csv`](data/sample_pressure_data.csv)
+* 📦 **Sample Output 3D STL**: [`outputs/sample_orthotic_shell.stl`](outputs/sample_orthotic_shell.stl) *(Viewable natively in 3D on GitHub)*
 
 ---
 
@@ -67,15 +94,6 @@ $$\mathbf{v}_i' = \mathbf{v}_i + \left( h_{\text{base}} + \alpha \cdot Z_{\text{
 enforcing the strict manufacturing boundary:
 
 $$\max_{\mathbf{v}} \|\mathbf{v}_{\text{generated}} - \mathbf{v}_{\text{nominal}}\| \le 1.5\text{ mm}$$
-
----
-
-## ⚡ Key Technical Features
-
-1. **Data Ingestion & Matrix Processing**: Parses raw 1,260-node spatial sensor matrices ($42 \times 30$ grid) and performs matrix filtering.
-2. **Parametric Geometry Generation**: Procedurally computes custom footbed geometry mapped to heel strike, arch support, and metatarsal zones.
-3. **Surface Optimization Algorithm**: Regularizes vertex offsets to prevent step-discontinuities and stress boundaries.
-4. **Interactive Streamlit Dashboard**: Live interactive 3D mesh preview, adjustable parameters, and one-click STL export.
 
 ---
 
